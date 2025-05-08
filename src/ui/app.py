@@ -6,13 +6,18 @@ AIdea Lab - 아이디어 분석 워크숍 UI
 """
 
 import os
+import sys
+import asyncio
 import streamlit as st
 from dotenv import load_dotenv
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from src.agents.critic_agent import CriticPersonaAgent
+# 프로젝트 루트 디렉토리를 sys.path에 추가
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+from src.orchestrator.main_orchestrator import AIdeaLabOrchestrator
+from config.personas import PERSONA_CONFIGS, PersonaType, ORCHESTRATOR_CONFIG
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
@@ -41,9 +46,9 @@ def create_session():
     )
     return session, session_id
 
-def analyze_idea(idea_text, session, session_id):
+async def analyze_idea(idea_text, session, session_id):
     """
-    사용자 아이디어를 분석하는 함수
+    사용자 아이디어를 멀티 페르소나로 분석하고 최종 요약을 생성하는 함수
     
     Args:
         idea_text (str): 사용자가 입력한 아이디어 텍스트
@@ -51,104 +56,167 @@ def analyze_idea(idea_text, session, session_id):
         session_id (str): 세션 ID
         
     Returns:
-        str: 분석 결과 텍스트
+        dict: 각 페르소나별 분석 결과와 최종 요약
     """
-    # 페르소나 에이전트 생성
-    critic_agent = CriticPersonaAgent()
+    # 오케스트레이터 생성
+    orchestrator = AIdeaLabOrchestrator()
     
-    # 세션 상태에 아이디어 저장
-    session.state["initial_idea"] = idea_text
+    # 세션 상태에 아이디어 저장 (run_all_personas_sequentially 내부에서도 처리하지만, 여기서도 명시적으로 수행 가능)
+    current_session = session_service.get_session(app_name=APP_NAME, user_id=USER_ID, session_id=session_id)
+    if not current_session: # 세션이 없을 경우 (create_session 직후)
+         current_session = session
+    current_session.state["initial_idea"] = idea_text
+
+    # 결과 저장 딕셔너리
+    results = {}
     
-    # Runner 생성
-    runner = Runner(
-        agent=critic_agent.get_agent(),
+    # 1. 페르소나 순차 분석 실행 (수정된 부분)
+    await orchestrator.run_all_personas_sequentially( # await 추가
+        session_service=session_service,
         app_name=APP_NAME,
-        session_service=session_service
-    )
-    
-    # 입력 메시지 생성
-    content = types.Content(
-        role="user",
-        parts=[types.Part(text=f"다음 아이디어를 분석해주세요: {idea_text}")]
-    )
-    
-    # Runner를 통해 에이전트 실행
-    events = runner.run(
         user_id=USER_ID,
         session_id=session_id,
-        new_message=content
+        idea_text=idea_text
     )
-    
-    # 응답 처리
-    response_text = None
-    for event in events:
-        if event.is_final_response() and event.content and event.content.parts:
-            response_text = event.content.parts[0].text
-            break
-    
-    # 세션 상태에서 응답 확인
+            
+    # 세션에서 각 페르소나의 결과 가져오기
     updated_session = session_service.get_session(
         app_name=APP_NAME,
         user_id=USER_ID,
         session_id=session_id
     )
     
-    # 세션에 저장된 응답 또는 직접 받은 응답 반환
-    output_key = critic_agent.get_output_key()
+    output_keys = orchestrator.get_output_keys()
     if updated_session and hasattr(updated_session, 'state'):
-        return updated_session.state.get(output_key, response_text)
-    return response_text
+        for persona_key_name, state_key in output_keys.items():
+            if persona_key_name != "summary" and state_key in updated_session.state:
+                results[persona_key_name] = updated_session.state[state_key]
+
+    # 2. 최종 요약 생성
+    summary_runner = Runner(
+        agent=orchestrator.get_summary_agent(),
+        app_name=APP_NAME,
+        session_service=session_service # 동일 세션 사용
+    )
+    
+    summary_content_parts = [types.Part(text=f"아이디어 '''{idea_text}'''와 이전 분석 내용들을 바탕으로 최종 요약을 생성해주세요.")]
+    
+    summary_content = types.Content(
+        role="user", 
+        parts=summary_content_parts
+    )
+
+    summary_events = summary_runner.run(
+        user_id=USER_ID,
+        session_id=session_id, # 동일 세션 ID 사용
+        new_message=summary_content
+    )
+
+    for event in summary_events:
+        if event.is_final_response():
+            break
+
+    # 세션에서 최종 요약 결과 가져오기
+    final_session = session_service.get_session(
+        app_name=APP_NAME,
+        user_id=USER_ID,
+        session_id=session_id
+    )
+
+    summary_key = output_keys["summary"]
+    if final_session and hasattr(final_session, 'state') and summary_key in final_session.state:
+        results["summary"] = final_session.state[summary_key]
+    else: # 요약 생성 실패 또는 키 부재 시 명시적 None 또는 빈 문자열 처리
+        results["summary"] = None
+            
+    return results
 
 def main():
     """메인 애플리케이션 함수"""
     st.title("🧠 AIdea Lab - 아이디어 분석 워크숍")
     
-    # 세션 스테이트 초기화
     if 'session_counter' not in st.session_state:
         st.session_state.session_counter = 0
     
-    if 'analysis_result' not in st.session_state:
-        st.session_state.analysis_result = None
-    
+    if 'analysis_results' not in st.session_state:
+        st.session_state.analysis_results = {}
+            
     st.markdown("""
     ### 💡 아이디어 분석 서비스
-    자유롭게 아이디어를 입력하시면, AI 페르소나가 다양한 관점에서 분석해드립니다.
+    자유롭게 아이디어를 입력하시면, 다양한 AI 페르소나가 여러 관점에서 분석해드리고 최종 정리까지 해드립니다.
     """)
     
-    # 아이디어 입력 영역
     idea_text = st.text_area(
         "아이디어를 입력해주세요:",
         height=150,
         placeholder="예: 수면 중 꿈을 기록하고 분석해주는 웨어러블 기기"
     )
     
-    # 분석 요청 버튼
     if st.button("아이디어 분석 요청"):
         if not idea_text:
             st.error("아이디어를 입력해주세요!")
         else:
-            # API 키 확인
             api_key = os.getenv("GOOGLE_API_KEY")
             if not api_key or api_key == "YOUR_API_KEY":
-                st.error("GOOGLE_API_KEY가 설정되지 않았습니다. .env 파일에 API 키를 설정해주세요.")
+                st.error("GOOGLE_API_KEY가 .env 파일에 설정되지 않았거나 유효하지 않습니다. 확인해주세요.")
             else:
-                # 새 세션 생성
-                session, session_id = create_session()
+                # create_session() 호출 시 반환되는 session 객체를 사용
+                current_session, session_id = create_session() 
                 st.session_state.session_counter += 1
                 
-                # 로딩 상태 표시
-                with st.spinner("AI 페르소나가 아이디어를 분석 중입니다..."):
+                with st.spinner("AI 페르소나들이 아이디어를 분석하고 최종 요약 중입니다..."):
                     try:
-                        # 아이디어 분석 실행
-                        analysis_result = analyze_idea(idea_text, session, session_id)
-                        st.session_state.analysis_result = analysis_result
+                        # analyze_idea를 await으로 호출
+                        analysis_results = asyncio.run(analyze_idea(idea_text, current_session, session_id))
+                        st.session_state.analysis_results = analysis_results
                     except Exception as e:
                         st.error(f"분석 중 오류가 발생했습니다: {str(e)}")
+                        st.exception(e) # 개발 중 상세 오류 확인용
     
-    # 분석 결과 표시
-    if st.session_state.analysis_result:
-        st.markdown("### 🔍 비판적 분석가의 분석 결과")
-        st.markdown(st.session_state.analysis_result)
+    if st.session_state.analysis_results:
+        st.markdown("### 🚀 AI 페르소나 분석 결과")
+        
+        tab_titles = [
+            f"{PERSONA_CONFIGS[PersonaType.MARKETER]['icon']} {PERSONA_CONFIGS[PersonaType.MARKETER]['name']}",
+            f"{PERSONA_CONFIGS[PersonaType.CRITIC]['icon']} {PERSONA_CONFIGS[PersonaType.CRITIC]['name']}",
+            f"{PERSONA_CONFIGS[PersonaType.ENGINEER]['icon']} {PERSONA_CONFIGS[PersonaType.ENGINEER]['name']}",
+            f"{ORCHESTRATOR_CONFIG['icon']} 최종 요약" 
+        ]
+        tabs = st.tabs(tab_titles)
+        
+        persona_keys_map = {
+            PersonaType.MARKETER: "marketer",
+            PersonaType.CRITIC: "critic",
+            PersonaType.ENGINEER: "engineer",
+        }
+
+        for i, persona_type_enum_member in enumerate(persona_keys_map.keys()):
+            with tabs[i]:
+                config = PERSONA_CONFIGS[persona_type_enum_member]
+                result_key = persona_keys_map[persona_type_enum_member]
+                st.subheader(f"{config['icon']} {config['name']}")
+                st.write(f"**역할**: {config['role']}")
+                # 결과가 None일 경우도 고려
+                if result_key in st.session_state.analysis_results and st.session_state.analysis_results[result_key] is not None:
+                    st.markdown(st.session_state.analysis_results[result_key])
+                else:
+                    st.info(f"{config['name']}의 분석 결과가 아직 없거나 생성 중 오류가 발생했습니다.")
+        
+        # 최종 요약 탭
+        with tabs[3]:
+            st.subheader(f"{ORCHESTRATOR_CONFIG['icon']} 최종 아이디어 검증 보고서")
+            # 결과가 None일 경우도 고려
+            if "summary" in st.session_state.analysis_results and st.session_state.analysis_results["summary"] is not None:
+                st.markdown(st.session_state.analysis_results["summary"])
+            else:
+                all_personas_analyzed = all(
+                    key in st.session_state.analysis_results and st.session_state.analysis_results[key] is not None
+                    for key in persona_keys_map.values()
+                )
+                if all_personas_analyzed: # 모든 페르소나 분석은 완료되었으나 요약만 없는 경우
+                    st.warning("최종 요약 생성에 실패했거나, 요약 결과가 없습니다.")
+                else: # 페르소나 분석 중 일부가 완료되지 않았거나 오류가 있는 경우
+                    st.info("모든 페르소나 분석이 완료된 후 최종 요약이 제공됩니다. 일부 페르소나 분석 결과가 누락되었을 수 있습니다.")
 
 if __name__ == "__main__":
     main() 

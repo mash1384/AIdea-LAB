@@ -89,11 +89,61 @@
 - **이슈**: ADK의 세션 상태를 UI 세션과 연동하는 방식에 대한 고민
 - **해결**: Streamlit 세션 상태와 ADK 세션을 분리하여 관리하고, 필요 시 ADK 세션 상태의 값을 Streamlit 세션 상태로 복사하는 방식 채택
 
+### Google ADK API 호환성 문제 해결 (2025-05-21)
+
+- **문제 상황**: Google ADK API 호환성 문제로 테스트 실행 시 다음과 같은 검증 오류 발생
+  ```
+  pydantic_core._pydantic_core.ValidationError: 3 validation errors for LlmAgent
+  name
+    Value error, Found invalid agent name: `비판적 분석가`. Agent name must be a valid identifier.
+  temperature
+    Extra inputs are not permitted
+  max_output_tokens
+    Extra inputs are not permitted
+  ```
+
+- **원인 분석**:
+  1. **Agent 이름 제약조건**: ADK API는 Agent 이름이 영문자, 숫자, 언더스코어로만 구성되어야 함
+  2. **API 매개변수 변경**: `temperature`와 `max_output_tokens`가 `Agent` 클래스의 직접 매개변수가 아니라 `generate_content_config` 내부에 설정되어야 함
+  3. **타입 시스템**: `generate_content_config`는 딕셔너리가 아닌 `GenerateContentConfig` 객체 타입임
+
+- **수정 내용**:
+  1. **CriticPersonaAgent 수정**:
+     - `name` 매개변수를 "critic_agent"로 변경
+     - LLM 파라미터를 `generate_content_config` 딕셔너리로 이동
+     - 세션 상태 접근 시 안전한 처리 추가
+  
+  2. **테스트 코드 개선**:
+     - `test_critic_agent.py`: 
+       - `GenerateContentConfig` 타입을 활용한 속성 검증으로 변경
+       - 딕셔너리 방식에서 객체 속성 접근 방식으로 테스트 로직 수정
+     
+     - `test_app.py`:
+       - 모킹 방식 개선 및 명확한 픽스처 이름 사용 (mock_session_service → mock_app_session_service)
+       - 테스트 세션 객체 속성 추가 (id, app_name, user_id, events, last_update_time)
+       - 어설션 로직 구체화 및 개선
+
+  3. **디렉터리 구조 보완**:
+     - Python 패키지 인식을 위한 `__init__.py` 파일 추가
+     - 테스트 실행을 위한 PYTHONPATH 설정 방법 확립
+
 ### 다음 단계
 - Phase 2: 멀티 페르소나 순차 실행 및 오케스트레이션 구현
   - 창의적 마케터 및 현실적 엔지니어 페르소나 Agent 클래스 구현
   - 오케스트레이터 에이전트 구현
   - 순차적 페르소나 실행 로직 구현
   - UI 확장하여 멀티 페르소나 결과 표시
+
+## Phase 2: 멀티 페르소나 및 오케스트레이션 구현 (완료)
+
+- **마케터 에이전트 (`src/agents/marketer_agent.py`)**: 아이디어의 창의적 가치와 시장 잠재력 분석.
+- **엔지니어 에이전트 (`src/agents/engineer_agent.py`)**: 아이디어의 기술적 실현 가능성 검토.
+- **오케스트레이터 (`src/orchestrator/main_orchestrator.py`)**: 각 페르소나 에이전트를 순차적으로 실행하고 결과를 취합. `SequentialAgent` 대신 커스텀 로직으로 순차 실행을 구현하여 `pydantic` 유효성 검사 오류를 해결.
+- **UI 업데이트 (`src/ui/app.py`)**:
+    - 멀티 페르소나 분석 결과를 탭으로 구분하여 표시.
+    - 오케스트레이터를 통해 페르소나 순차 실행 및 최종 요약 기능 통합.
+    - `asyncio`를 사용하여 비동기적으로 에이전트 실행.
+    - 모듈 경로 문제 해결 (`sys.path` 수정 및 `setup.py` 추가).
+- **최종 요약 기능**: 모든 페르소나의 분석 결과를 바탕으로 최종 요약 생성.
 
 

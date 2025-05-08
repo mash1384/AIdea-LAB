@@ -64,9 +64,13 @@ aidea-lab/
 
 Streamlit을 사용한 웹 기반 사용자 인터페이스를 구현한 파일입니다. 사용자가 아이디어를 입력하고 분석 결과를 확인할 수 있는 UI를 제공합니다.
 
-- **create_session()**: 새로운 ADK 세션을 생성하는 함수입니다.
-- **analyze_idea()**: 사용자 아이디어를 분석하는 함수로, 비판적 분석가 에이전트를 실행하고 결과를 반환합니다.
-- **main()**: Streamlit 애플리케이션의 메인 함수로, UI 컴포넌트 구성 및 사용자 인터랙션을 처리합니다.
+- **역할**: Streamlit 기반의 사용자 인터페이스 (UI)를 제공합니다.
+- **아키텍처**:
+    - 사용자가 아이디어를 입력하고 분석을 요청하는 웹 애플리케이션의 진입점입니다.
+    - `AIdeaLabOrchestrator`를 호출하여 아이디어 분석 프로세스를 시작합니다.
+    - 각 페르소나(마케터, 비평가, 엔지니어)의 분석 결과와 최종 요약을 탭 형태로 사용자에게 보여줍니다.
+    - 세션 관리를 통해 사용자별 분석 흐름을 유지합니다.
+    - `asyncio`를 사용하여 백엔드 로직(에이전트 실행)을 비동기적으로 처리하여 UI 반응성을 유지합니다.
 
 ### 5. src/poc/simple_adk_agent.py
 
@@ -228,3 +232,83 @@ Phase 1에서는 단일 페르소나 에이전트만 구현했지만, 다중 페
 2. **설정 기반 초기화**: 설정 파일에서 페르소나 매개변수를 로드하는 방식으로, 새 페르소나 추가 시 코드 변경을 최소화
 
 이러한 아키텍처 설계를 통해 Phase 2에서 추가적인 페르소나와 오케스트레이션 로직을 쉽게 통합할 수 있습니다.
+
+## 파일별 역할 및 아키텍처 설명
+
+### 1. `src/ui/app.py`
+- **역할**: Streamlit 기반의 사용자 인터페이스 (UI)를 제공합니다.
+- **아키텍처**:
+    - 사용자가 아이디어를 입력하고 분석을 요청하는 웹 애플리케이션의 진입점입니다.
+    - `AIdeaLabOrchestrator`를 호출하여 아이디어 분석 프로세스를 시작합니다.
+    - 각 페르소나(마케터, 비평가, 엔지니어)의 분석 결과와 최종 요약을 탭 형태로 사용자에게 보여줍니다.
+    - 세션 관리를 통해 사용자별 분석 흐름을 유지합니다.
+    - `asyncio`를 사용하여 백엔드 로직(에이전트 실행)을 비동기적으로 처리하여 UI 반응성을 유지합니다.
+
+### 2. `src/orchestrator/main_orchestrator.py`
+- **역할**: 아이디어 분석 워크플로우를 총괄하는 오케스트레이터입니다.
+- **아키텍처**:
+    - `MarketerPersonaAgent`, `CriticPersonaAgent`, `EngineerPersonaAgent` 인스턴스를 생성하고 관리합니다.
+    - `run_all_personas_sequentially` 메소드를 통해 정의된 순서(마케터 -> 비평가 -> 엔지니어)대로 각 페르소나 에이전트를 실행합니다. 이 과정에서 ADK의 `Runner`를 사용하여 각 에이전트를 실행하고, 세션 상태를 통해 중간 결과들을 저장하고 다음 에이전트로 전달합니다.
+    - 모든 페르소나의 분석이 완료된 후, `summary_agent` (최종 요약 에이전트)를 실행하여 종합적인 보고서를 생성합니다.
+    - 각 에이전트의 출력 키를 관리하여 UI에서 결과를 올바르게 참조할 수 있도록 합니다.
+    - 초기 `SequentialAgent` 사용 시 발생했던 Pydantic 유효성 검사 문제를 해결하기 위해, 에이전트들을 직접 순차적으로 실행하는 커스텀 로직으로 변경되었습니다.
+
+### 3. `src/agents/`
+- 이 디렉토리에는 다양한 AI 페르소나 에이전트들이 포함됩니다. 각 에이전트는 Google ADK의 `Agent` 클래스를 기반으로 구현됩니다.
+
+    #### 3.1. `src/agents/marketer_agent.py` (MarketerPersonaAgent)
+    - **역할**: 마케팅 전문가 페르소나를 담당합니다.
+    - **아키텍처**:
+        - 입력된 아이디어에 대해 시장 잠재력, 타겟 고객, 독창성, 비즈니스 모델 관점에서 분석하고 평가합니다.
+        - `MARKETER_PROMPT` (from `config/prompts.py`)와 `PERSONA_CONFIGS[PersonaType.MARKETER]` (from `config/personas.py`) 설정을 사용하여 ADK 에이전트를 초기화합니다.
+
+    #### 3.2. `src/agents/critic_agent.py` (CriticPersonaAgent)
+    - **역할**: 비평가 페르소나를 담당합니다.
+    - **아키텍처**:
+        - 입력된 아이디어의 잠재적인 문제점, 약점, 리스크, 개선점 등을 비판적인 시각에서 분석합니다.
+        - `CRITIC_PROMPT`와 `PERSONA_CONFIGS[PersonaType.CRITIC]` 설정을 사용합니다.
+
+    #### 3.3. `src/agents/engineer_agent.py` (EngineerPersonaAgent)
+    - **역할**: 엔지니어 페르소나를 담당합니다.
+    - **아키텍처**:
+        - 입력된 아이디어의 기술적 실현 가능성, 필요한 기술 스택, 개발 난이도, 잠재적 기술적 장벽 등을 평가합니다.
+        - `ENGINEER_PROMPT`와 `PERSONA_CONFIGS[PersonaType.ENGINEER]` 설정을 사용합니다.
+
+### 4. `config/`
+- 애플리케이션의 주요 설정 값들을 관리하는 디렉토리입니다.
+
+    #### 4.1. `config/personas.py`
+    - **역할**: 각 AI 페르소나(마케터, 비평가, 엔지니어) 및 오케스트레이터의 기본 설정을 정의합니다.
+    - **아키텍처**:
+        - `PersonaType` Enum을 통해 페르소나 유형을 정의합니다.
+        - `PERSONA_CONFIGS` 딕셔너리는 각 페르소나의 이름, 역할 설명, 아이콘, LLM 모델의 `temperature`, `max_output_tokens` 등의 파라미터를 포함합니다.
+        - `PERSONA_SEQUENCE` 리스트는 오케스트레이터가 페르소나들을 실행하는 순서를 정의합니다.
+        - `ORCHESTRATOR_CONFIG`는 최종 요약 에이전트의 설정을 포함합니다.
+
+    #### 4.2. `config/prompts.py`
+    - **역할**: 각 AI 에이전트(페르소나 및 오케스트레이터/요약 에이전트)가 사용할 시스템 프롬프트를 정의합니다.
+    - **아키텍처**:
+        - `MARKETER_PROMPT`, `CRITIC_PROMPT`, `ENGINEER_PROMPT`는 각 페르소나 에이전트의 역할과 분석 방향을 지시하는 상세한 지침을 담고 있습니다.
+        - `FINAL_SUMMARY_PROMPT`는 모든 페르소나의 분석 결과를 종합하여 최종 보고서를 작성하도록 요약 에이전트에게 지시합니다.
+        - `ORCHESTRATOR_PROMPT`는 현재 직접적으로 사용되지는 않지만, 향후 오케스트레이터 자체를 LLM 에이전트로 발전시킬 경우 활용될 수 있습니다. (현재는 커스텀 로직으로 페르소나들을 순차 실행)
+
+### 5. `setup.py`
+- **역할**: Python 패키지 설정 파일입니다.
+- **아키텍처**:
+    - `setuptools`를 사용하여 프로젝트를 패키지화합니다.
+    - `find_packages()`를 통해 `src` 디렉토리 하위의 모듈들을 패키지에 포함시킵니다.
+    - 이 파일을 프로젝트 루트에 추가하고 `pip install -e .` 명령으로 개발 모드로 설치하면, `src.orchestrator`와 같은 절대 경로 임포트가 `PYTHONPATH` 설정 없이도 정상적으로 동작하도록 돕습니다. 이는 `ModuleNotFoundError: No module named 'src'` 오류를 해결하는 한 가지 방법입니다.
+
+### 6. `.env`
+- **역할**: 환경 변수를 저장하는 파일입니다.
+- **아키텍처**:
+    - `GOOGLE_API_KEY`와 같은 민감한 정보나 환경별 설정값을 저장합니다.
+    - `python-dotenv` 라이브러리를 통해 애플리케이션 실행 시 이 파일의 변수들을 환경 변수로 로드합니다.
+    - `.gitignore`에 추가되어 버전 관리 시스템에 포함되지 않도록 하는 것이 일반적입니다.
+
+### 참고: Google ADK (Agent Development Kit)
+- 이 프로젝트는 Google의 ADK를 핵심 프레임워크로 사용합니다.
+- **`google.adk.agents.Agent`**: LLM 기반 에이전트를 생성하기 위한 기본 클래스입니다. 각 페르소나 및 요약 에이전트가 이를 상속받거나 활용합니다.
+- **`google.adk.runners.Runner`**: 에이전트를 실행하고 세션 관리 및 이벤트 처리를 담당합니다.
+- **`google.adk.sessions.InMemorySessionService`**: 세션 데이터를 메모리에 저장하고 관리하는 서비스입니다. 사용자별 대화 상태나 에이전트 실행 결과를 저장하는 데 사용됩니다.
+- **`google.genai.types`**: Gemini API와 상호작용하기 위한 데이터 타입 (예: `Content`, `Part`)을 제공합니다.

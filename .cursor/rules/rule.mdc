@@ -1,0 +1,51 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+
+# Your rule content
+
+# Project Development Rules & Guidelines
+
+## I. Absolute Must-Follow Rules (Always)
+ALWAYS read the <https://google.github.io/adk-docs/> before writing any code.
+1.  **Architecture Document**: ALWAYS read the `memory-bank/@architecture.md` file before writing any code. This includes the complete database schema.
+2.  **Workflow Document**: ALWAYS read the `memory-bank/@workflow.md` file before writing any code.
+3.  **Update Architecture Document**: Update the `memory-bank/@architecture.md` file after adding major features or completing milestones.
+
+## II. Code Structure & Modularization (Mandatory)
+
+1.  **Modular Design**: All code MUST be modularized by separating logical units into multiple files.
+2.  **File Size Limit**: Consider splitting a single file if it exceeds 500 lines of code.
+3.  **Single Responsibility Principle**: Ensure that a single function or class does not have too many responsibilities.
+4.  **Avoid Monolithic Structure**: Monolithic structures (one single, large file) MUST be strictly avoided.
+5.  **Group Related Features**: Group related functionalities within the same directory.
+6.  **Clear Boundaries**: Each module MUST have clear responsibilities and boundaries.
+
+## III. File Management
+
+1.  **Organize Related Files**: Keep related files organized within the same directory.
+2.  **Meaningful Naming**: Use meaningful names for files and folders.
+3.  **Efficient Tab Management**: Keep frequently used files open in tabs for efficiency.
+
+## IV. Code Writing Practices
+
+1.  **Consistent Coding Style**: Maintain a consistent coding style throughout the project.
+2.  **Appropriate Commenting**: Use comments appropriately to explain the code.
+3.  **Decompose Complex Logic**: Break down complex logic into smaller, manageable functions.
+4.  **Utilize Autocompletion**: Leverage autocompletion features to save time.
+
+## V. AI Feature Utilization
+
+1.  **Clear Instructions**: Provide clear and concise instructions when requesting tasks from AI.
+2.  **Specific Requirements for Code Generation**: Present specific requirements when asking AI to generate code.
+3.  **Review AI Suggestions**: ALWAYS review AI-generated suggestions before applying them.
+4.  **Step-by-Step for Complex Problems**: Explain complex problems to AI step-by-step.
+
+## VI. Debugging Practices
+
+1.  **Address Runtime Errors Immediately**: Resolve runtime errors as soon as they occur.
+2.  **Active Use of Debugger**: Actively use debugger functionalities.
+3.  **Test After Changes**: ALWAYS test the code after making any changes.
+4.  **Effective Logging**: Use log messages effectively for debugging and monitoring.

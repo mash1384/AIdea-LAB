@@ -13,7 +13,7 @@ from google.adk.sessions import Session
 from google.genai import types
 
 from config.prompts import ORCHESTRATOR_PROMPT, FINAL_SUMMARY_PROMPT
-from config.personas import PersonaType, PERSONA_CONFIGS, PERSONA_SEQUENCE, ORCHESTRATOR_CONFIG
+from config.personas import PersonaType, PERSONA_CONFIGS, PERSONA_SEQUENCE, ORCHESTRATOR_CONFIG, SELECTED_MODEL
 
 from src.agents.marketer_agent import MarketerPersonaAgent
 from src.agents.critic_agent import CriticPersonaAgent
@@ -53,7 +53,7 @@ class AIdeaLabOrchestrator:
         
         self.summary_agent = Agent(
             name="summary_agent",
-            model="gemini-2.0-flash",
+            model=SELECTED_MODEL,
             description="최종 요약 생성 에이전트",
             instruction=FINAL_SUMMARY_PROMPT,
             output_key=self.config["summary_output_key"],
@@ -63,7 +63,7 @@ class AIdeaLabOrchestrator:
         # 커스텀 에이전트로 대체하여 에이전트들을 직접 관리
         self.orchestrator_agent = Agent(
             name="aidea_lab_orchestrator",
-            model="gemini-2.0-flash",
+            model=SELECTED_MODEL,
             description="AIdea Lab 워크숍 오케스트레이터",
             instruction=ORCHESTRATOR_PROMPT
         )

@@ -10,6 +10,7 @@ from google.adk.sessions.in_memory_session_service import InMemorySessionService
 from google.adk.sessions.session import Session
 from google.adk.runners import Runner
 from google.genai import types
+import sys
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
@@ -33,9 +34,13 @@ def create_session():
 
 # 세션 상태를 사용하는 에이전트 정의
 def create_state_aware_agent():
+    # sys.path 설정 및 SELECTED_MODEL 가져오기
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+    from config.personas import SELECTED_MODEL
+    
     agent = Agent(
         name="state_aware_agent",
-        model="gemini-2.0-flash",
+        model=SELECTED_MODEL,  # 선택된 제미니 모델 사용
         description="An agent that demonstrates using session state.",
         instruction="""
         당신은 사용자가 제공하는 정보를 기억하고 참조할 수 있는 도우미입니다.

@@ -1,6 +1,6 @@
 import pytest
 from src.agents.critic_agent import CriticPersonaAgent
-from config.personas import PersonaType, PERSONA_CONFIGS
+from config.personas import PersonaType, PERSONA_CONFIGS, SELECTED_MODEL
 from config.prompts import CRITIC_PROMPT
 from google.genai.types import GenerateContentConfig # GenerateContentConfig 타입을 확인하기 위해 필요할 수 있음
 
@@ -14,6 +14,7 @@ def test_critic_agent_initialization():
     assert agent.description == persona_config["description"]
     assert agent.instruction == CRITIC_PROMPT
     assert agent.output_key == persona_config["output_key"]
+    assert agent.model == SELECTED_MODEL  # 선택된 모델 검증
 
     # generate_content_config 설정 검증
     assert isinstance(agent.generate_content_config, GenerateContentConfig) # 타입 확인

@@ -9,7 +9,7 @@ import os
 from dotenv import load_dotenv
 from google.adk.agents import Agent
 from config.prompts import ENGINEER_PROMPT
-from config.personas import PersonaType, PERSONA_CONFIGS
+from config.personas import PersonaType, PERSONA_CONFIGS, SELECTED_MODEL
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
@@ -32,7 +32,7 @@ class EngineerPersonaAgent:
         # 에이전트 생성
         self.agent = Agent(
             name="engineer_agent",  # 영문자와 언더스코어만 사용
-            model="gemini-2.0-flash",  # Gemini 모델 사용
+            model=SELECTED_MODEL,  # 선택된 제미니 모델 사용
             description=persona_config["description"],
             instruction=ENGINEER_PROMPT,  # 현실적 엔지니어 시스템 프롬프트
             output_key=persona_config["output_key"],  # session.state에 저장될 키

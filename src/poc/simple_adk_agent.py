@@ -4,11 +4,16 @@ Google ADK를 사용하여, API 키를 환경 변수에서 로드하고 Gemini�
 """
 
 import os
+import sys
 from dotenv import load_dotenv
 from google.adk.agents import Agent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
+
+# 프로젝트 루트 디렉토리를 sys.path에 추가
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+from config.personas import SELECTED_MODEL
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
@@ -16,7 +21,7 @@ load_dotenv()
 # 기본 에이전트 정의
 basic_agent = Agent(
     name="basic_hello_agent",
-    model="gemini-2.0-flash",  # 안정적인 Gemini 모델 사용
+    model=SELECTED_MODEL,  # 선택된 제미니 모델 사용
     description="A simple agent that responds to basic greetings and questions.",
     instruction="You are a helpful assistant that provides concise responses to user queries.",
 )
@@ -26,6 +31,7 @@ def main():
     print("🤖 AIdea Lab Basic ADK Agent Test")
     print("환경 변수에서 API 키를 로드하여 Google ADK와 Gemini 모델을 연결합니다.")
     print("간단한 프롬프트로 LLM 기본 응답을 테스트합니다.")
+    print(f"사용 중인 모델: {SELECTED_MODEL}")
     
     # 환경 변수 확인
     api_key = os.getenv("GOOGLE_API_KEY")

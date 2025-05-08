@@ -17,7 +17,9 @@ from google.genai import types
 # 프로젝트 루트 디렉토리를 sys.path에 추가
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from src.orchestrator.main_orchestrator import AIdeaLabOrchestrator
-from config.personas import PERSONA_CONFIGS, PersonaType, ORCHESTRATOR_CONFIG
+from config.personas import PERSONA_CONFIGS, PersonaType, ORCHESTRATOR_CONFIG, SELECTED_MODEL
+from config.models import get_model_display_options, MODEL_CONFIGS, ModelType, DEFAULT_MODEL
+import config.personas as personas
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
@@ -45,6 +47,19 @@ def create_session():
         session_id=session_id
     )
     return session, session_id
+
+def update_selected_model():
+    """
+    UI에서 선택된 모델 ID로 전역 SELECTED_MODEL 변수를 업데이트
+    """
+    # 선택된 모델 ID를 가져옴
+    model_id = st.session_state.selected_model
+    
+    # personas.py의 SELECTED_MODEL 전역 변수 업데이트
+    personas.SELECTED_MODEL = model_id
+    
+    # 디버깅/확인용 메시지 (제품 환경에서는 제거)
+    st.success(f"모델이 '{model_id}'(으)로 변경되었습니다.")
 
 async def analyze_idea(idea_text, session, session_id):
     """
@@ -140,11 +155,39 @@ def main():
     
     if 'analysis_results' not in st.session_state:
         st.session_state.analysis_results = {}
-            
+    
+    # 선택된 모델 세션 상태 초기화
+    if 'selected_model' not in st.session_state:
+        st.session_state.selected_model = DEFAULT_MODEL.value
+    
+    # 모델 선택 드롭다운 옵션 가져오기
+    model_options = get_model_display_options()
+    
     st.markdown("""
     ### 💡 아이디어 분석 서비스
     자유롭게 아이디어를 입력하시면, 다양한 AI 페르소나가 여러 관점에서 분석해드리고 최종 정리까지 해드립니다.
     """)
+    
+    # 설정 섹션 (접을 수 있는 expander 사용)
+    with st.expander("⚙️ 고급 설정"):
+        # 모델 선택 드롭다운
+        st.selectbox(
+            "AI 모델 선택:",
+            options=list(model_options.keys()),
+            format_func=lambda x: x,  # 표시 이름 그대로 보여줌
+            index=list(model_options.values()).index(st.session_state.selected_model),
+            key="model_display_name",
+            on_change=lambda: setattr(st.session_state, 'selected_model', model_options[st.session_state.model_display_name])
+        )
+        
+        # 선택된 모델 표시
+        current_model_type = next((model_type for model_type in ModelType if model_type.value == st.session_state.selected_model), None)
+        if current_model_type:
+            st.info(f"선택된 모델: {MODEL_CONFIGS[current_model_type]['description']}")
+        
+        # 모델 적용 버튼
+        if st.button("모델 변경 적용"):
+            update_selected_model()
     
     idea_text = st.text_area(
         "아이디어를 입력해주세요:",
@@ -160,6 +203,9 @@ def main():
             if not api_key or api_key == "YOUR_API_KEY":
                 st.error("GOOGLE_API_KEY가 .env 파일에 설정되지 않았거나 유효하지 않습니다. 확인해주세요.")
             else:
+                # 분석 요청 전 선택된 모델 적용
+                update_selected_model()
+                
                 # create_session() 호출 시 반환되는 session 객체를 사용
                 current_session, session_id = create_session() 
                 st.session_state.session_counter += 1

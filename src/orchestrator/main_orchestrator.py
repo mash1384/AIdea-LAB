@@ -6,7 +6,8 @@ AIdea Lab 오케스트레이터
 """
 
 import os
-from dotenv import load_dotenv
+import sys
+from typing import Dict, Any
 from google.adk.agents import Agent, SequentialAgent
 from google.adk.runners import Runner
 from google.genai import types
@@ -19,8 +20,7 @@ from src.agents.marketer_agent import MarketerPersonaAgent
 from src.agents.critic_agent import CriticPersonaAgent
 from src.agents.engineer_agent import EngineerPersonaAgent
 
-# .env 파일에서 환경 변수 로드
-load_dotenv()
+# .env 파일은 애플리케이션의 메인 진입점(app.py)에서 로드됨
 
 class AIdeaLabOrchestrator:
     """아이디어 워크숍 오케스트레이터 클래스"""

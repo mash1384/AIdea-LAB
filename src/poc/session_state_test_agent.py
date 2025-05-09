@@ -34,13 +34,13 @@ def create_session():
 
 # 세션 상태를 사용하는 에이전트 정의
 def create_state_aware_agent():
-    # sys.path 설정 및 SELECTED_MODEL 가져오기
+    # sys.path 설정 및 DEFAULT_MODEL 가져오기
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-    from config.personas import SELECTED_MODEL
+    from config.models import DEFAULT_MODEL
     
     agent = Agent(
         name="state_aware_agent",
-        model=SELECTED_MODEL,  # 선택된 제미니 모델 사용
+        model=DEFAULT_MODEL.value,  # DEFAULT_MODEL 직접 사용
         description="An agent that demonstrates using session state.",
         instruction="""
         당신은 사용자가 제공하는 정보를 기억하고 참조할 수 있는 도우미입니다.

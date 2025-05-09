@@ -6,14 +6,12 @@
 """
 
 import os
-from dotenv import load_dotenv
 from google.adk.agents import Agent
 from config.prompts import CRITIC_PROMPT
 from config.personas import PersonaType, PERSONA_CONFIGS
 from config.models import DEFAULT_MODEL
 
-# .env 파일에서 환경 변수 로드
-load_dotenv()
+# .env 파일은 애플리케이션의 메인 진입점(app.py)에서 로드됨
 
 class CriticPersonaAgent:
     """비판적 분석가 페르소나 에이전트 클래스"""

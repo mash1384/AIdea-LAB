@@ -48,56 +48,46 @@ def create_session():
     return session, session_id
 
 async def analyze_idea(idea_text, session, session_id):
-    """
-    아이디어를 분석하고 결과를 반환하는 함수
-    
-    Args:
-        idea_text (str): 분석할 아이디어 텍스트
-        session: 현재 세션 객체
-        session_id (str): 세션 ID
-        
-    Returns:
-        dict: 각 페르소나별 분석 결과와 최종 요약
-    """
-    # 오케스트레이터 생성 - 선택된 모델 명시적 전달
+    # ...
     orchestrator = AIdeaLabOrchestrator(model_name=st.session_state.selected_model)
     
-    # 세션 상태에 아이디어 저장
     current_session = session_service.get_session(app_name=APP_NAME, user_id=USER_ID, session_id=session_id)
-    if not current_session: # 세션이 없을 경우 (create_session 직후)
+    if not current_session:
          current_session = session
     current_session.state["initial_idea"] = idea_text
 
-    # 결과 저장 딕셔너리
     results = {}
     
-    # 워크플로우 에이전트(SequentialAgent) 가져오기
     workflow_agent = orchestrator.get_workflow_agent()
     
-    # 사용자 아이디어로 메시지 생성
     content = types.Content(
         role="user",
         parts=[types.Part(text=f"다음 아이디어를 분석해주세요: {idea_text}")]
     )
     
-    # 단일 Runner를 사용하여 워크플로우 에이전트 실행
     runner = Runner(
         agent=workflow_agent,
         app_name=APP_NAME,
         session_service=session_service
     )
     
-    # 에이전트 실행
-    events = runner.run(
+    # 에이전트 비동기 실행 결과를 변수에 할당 (await 없이)
+    event_stream = runner.run_async(
         user_id=USER_ID,
         session_id=session_id,
         new_message=content
     )
     
-    # 이벤트 처리
-    for event in events:
+    # 이벤트 비동기 처리 (event_stream 사용)
+    async for event in event_stream: # 수정된 변수명 사용
         if event.is_final_response():
-            break
+            # 최종 응답 처리 로직 (필요하다면)
+            # 예를 들어, 최종 응답 내용을 별도로 저장하거나 할 수 있습니다.
+            # 현재 코드는 단순히 break만 하고 있어서, 
+            # SequentialAgent의 마지막 에이전트(summary_agent)의 최종 응답이 나올 때까지 기다리게 됩니다.
+            # 이는 SequentialAgent가 모든 하위 에이전트를 실행하고 
+            # 그 결과가 session.state에 누적되도록 하는 올바른 흐름입니다.
+            pass # 특별한 처리가 없다면 pass 또는 break 유지
             
     # 세션에서 각 페르소나의 결과 가져오기
     updated_session = session_service.get_session(
@@ -152,10 +142,6 @@ def main():
         current_model_type = next((model_type for model_type in ModelType if model_type.value == st.session_state.selected_model), None)
         if current_model_type:
             st.info(f"선택된 모델: {MODEL_CONFIGS[current_model_type]['description']}")
-        
-        # 모델 적용 버튼
-        if st.button("모델 변경 적용"):
-            st.success(f"모델이 '{st.session_state.selected_model}'(으)로 설정되었습니다.")
     
     idea_text = st.text_area(
         "아이디어를 입력해주세요:",

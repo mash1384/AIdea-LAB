@@ -53,36 +53,36 @@ class AIdeaLabOrchestrator:
                 self.agents.append(self.engineer_agent.get_agent())
         
         # 최종 요약 생성을 위한 에이전트
-        generate_config = {
-            "temperature": self.config["temperature"],
-            "max_output_tokens": self.config["max_output_tokens"],
-            "safety_settings": [
-                {
-                    'category': 'HARM_CATEGORY_HARASSMENT',
-                    'threshold': 'BLOCK_NONE'
-                },
-                {
-                    'category': 'HARM_CATEGORY_HATE_SPEECH',
-                    'threshold': 'BLOCK_NONE'
-                },
-                {
-                    'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                    'threshold': 'BLOCK_NONE'
-                },
-                {
-                    'category': 'HARM_CATEGORY_DANGEROUS_CONTENT',
-                    'threshold': 'BLOCK_NONE'
-                }
-            ]
-        }
+        # generate_config = {
+        #     "temperature": self.config["temperature"],
+        #     "max_output_tokens": self.config["max_output_tokens"],
+        #     "safety_settings": [
+        #         {
+        #             'category': 'HARM_CATEGORY_HARASSMENT',
+        #             'threshold': 'BLOCK_NONE'
+        #         },
+        #         {
+        #             'category': 'HARM_CATEGORY_HATE_SPEECH',
+        #             'threshold': 'BLOCK_NONE'
+        #         },
+        #         {
+        #             'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+        #             'threshold': 'BLOCK_NONE'
+        #         },
+        #         {
+        #             'category': 'HARM_CATEGORY_DANGEROUS_CONTENT',
+        #             'threshold': 'BLOCK_NONE'
+        #         }
+        #     ]
+        # }
         
         self.summary_agent = Agent(
             name="summary_agent",
             model=self.model_name,
             description="최종 요약 생성 에이전트",
             instruction=FINAL_SUMMARY_PROMPT,
-            output_key=self.config["summary_output_key"],
-            generate_content_config=generate_config
+            output_key=self.config["summary_output_key"]
+            # generate_content_config=generate_config
         )
         
         # SequentialAgent 생성하여 모든 페르소나 에이전트와 요약 에이전트를 포함

@@ -32,28 +32,28 @@ class EngineerPersonaAgent:
         
         # 생성 내용 설정 구성
         # temperature와 max_output_tokens는 generate_content_config에 설정
-        generate_config = {
-            "temperature": persona_config["temperature"],
-            "max_output_tokens": persona_config["max_output_tokens"],
-            "safety_settings": [
-                {
-                    'category': 'HARM_CATEGORY_HARASSMENT',
-                    'threshold': 'BLOCK_NONE'
-                },
-                {
-                    'category': 'HARM_CATEGORY_HATE_SPEECH',
-                    'threshold': 'BLOCK_NONE'
-                },
-                {
-                    'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                    'threshold': 'BLOCK_NONE'
-                },
-                {
-                    'category': 'HARM_CATEGORY_DANGEROUS_CONTENT',
-                    'threshold': 'BLOCK_NONE'
-                }
-            ]
-        }
+        # generate_config = {
+        #     "temperature": persona_config["temperature"],
+        #     "max_output_tokens": persona_config["max_output_tokens"],
+        #     "safety_settings": [
+        #         {
+        #             'category': 'HARM_CATEGORY_HARASSMENT',
+        #             'threshold': 'BLOCK_NONE'
+        #         },
+        #         {
+        #             'category': 'HARM_CATEGORY_HATE_SPEECH',
+        #             'threshold': 'BLOCK_NONE'
+        #         },
+        #         {
+        #             'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+        #             'threshold': 'BLOCK_NONE'
+        #         },
+        #         {
+        #             'category': 'HARM_CATEGORY_DANGEROUS_CONTENT',
+        #             'threshold': 'BLOCK_NONE'
+        #         }
+        #     ]
+        # }
         
         # 에이전트 생성
         self.agent = Agent(
@@ -61,8 +61,8 @@ class EngineerPersonaAgent:
             model=model_name,  # 파라미터로 전달받은 모델 사용
             description=persona_config["description"],
             instruction=ENGINEER_PROMPT,  # 현실적 엔지니어 시스템 프롬프트
-            output_key=persona_config["output_key"],  # session.state에 저장될 키
-            generate_content_config=generate_config  # 생성 설정
+            output_key=persona_config["output_key"]  # session.state에 저장될 키
+            # generate_content_config=generate_config  # 생성 설정
         )
     
     def get_agent(self):

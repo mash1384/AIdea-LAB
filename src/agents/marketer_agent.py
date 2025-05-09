@@ -11,6 +11,7 @@ from config.prompts import MARKETER_PROMPT
 from config.personas import PersonaType, PERSONA_CONFIGS
 from config.models import DEFAULT_MODEL
 
+
 # .env 파일은 애플리케이션의 메인 진입점(app.py)에서 로드됨
 
 class MarketerPersonaAgent:
@@ -33,7 +34,25 @@ class MarketerPersonaAgent:
         # temperature와 max_output_tokens는 generate_content_config에 설정
         generate_config = {
             "temperature": persona_config["temperature"],
-            "max_output_tokens": persona_config["max_output_tokens"]
+            "max_output_tokens": persona_config["max_output_tokens"],
+            "safety_settings": [
+                {
+                    'category': 'HARM_CATEGORY_HARASSMENT',
+                    'threshold': 'BLOCK_NONE'
+                },
+                {
+                    'category': 'HARM_CATEGORY_HATE_SPEECH',
+                    'threshold': 'BLOCK_NONE'
+                },
+                {
+                    'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+                    'threshold': 'BLOCK_NONE'
+                },
+                {
+                    'category': 'HARM_CATEGORY_DANGEROUS_CONTENT',
+                    'threshold': 'BLOCK_NONE'
+                }
+            ]
         }
         
         # 에이전트 생성

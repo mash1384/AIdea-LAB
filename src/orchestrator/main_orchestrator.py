@@ -10,7 +10,6 @@ import sys
 from typing import Dict, Any
 from google.adk.agents import Agent, SequentialAgent
 from google.adk.runners import Runner
-from google.genai import types
 
 from config.prompts import FINAL_SUMMARY_PROMPT
 from config.personas import PersonaType, PERSONA_CONFIGS, PERSONA_SEQUENCE, ORCHESTRATOR_CONFIG
@@ -56,7 +55,25 @@ class AIdeaLabOrchestrator:
         # 최종 요약 생성을 위한 에이전트
         generate_config = {
             "temperature": self.config["temperature"],
-            "max_output_tokens": self.config["max_output_tokens"]
+            "max_output_tokens": self.config["max_output_tokens"],
+            "safety_settings": [
+                {
+                    'category': 'HARM_CATEGORY_HARASSMENT',
+                    'threshold': 'BLOCK_NONE'
+                },
+                {
+                    'category': 'HARM_CATEGORY_HATE_SPEECH',
+                    'threshold': 'BLOCK_NONE'
+                },
+                {
+                    'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+                    'threshold': 'BLOCK_NONE'
+                },
+                {
+                    'category': 'HARM_CATEGORY_DANGEROUS_CONTENT',
+                    'threshold': 'BLOCK_NONE'
+                }
+            ]
         }
         
         self.summary_agent = Agent(

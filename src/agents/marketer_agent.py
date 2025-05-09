@@ -9,7 +9,8 @@ import os
 from dotenv import load_dotenv
 from google.adk.agents import Agent
 from config.prompts import MARKETER_PROMPT
-from config.personas import PersonaType, PERSONA_CONFIGS, SELECTED_MODEL
+from config.personas import PersonaType, PERSONA_CONFIGS
+from config.models import DEFAULT_MODEL
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
@@ -17,8 +18,16 @@ load_dotenv()
 class MarketerPersonaAgent:
     """창의적 마케터 페르소나 에이전트 클래스"""
     
-    def __init__(self):
-        """에이전트 초기화"""
+    def __init__(self, model_name=None):
+        """
+        에이전트 초기화
+        
+        Args:
+            model_name (str, optional): 사용할 모델 이름. 기본값은 DEFAULT_MODEL.value
+        """
+        # 기본 모델 설정
+        model_name = model_name or DEFAULT_MODEL.value
+        
         # 페르소나 설정 가져오기
         persona_config = PERSONA_CONFIGS[PersonaType.MARKETER]
         
@@ -32,7 +41,7 @@ class MarketerPersonaAgent:
         # 에이전트 생성
         self.agent = Agent(
             name="marketer_agent",  # 영문자와 언더스코어만 사용
-            model=SELECTED_MODEL,  # 선택된 제미니 모델 사용
+            model=model_name,  # 파라미터로 전달받은 모델 사용
             description=persona_config["description"],
             instruction=MARKETER_PROMPT,  # 창의적 마케터 시스템 프롬프트
             output_key=persona_config["output_key"],  # session.state에 저장될 키

@@ -17,9 +17,8 @@ from google.genai import types
 # 프로젝트 루트 디렉토리를 sys.path에 추가
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from src.orchestrator.main_orchestrator import AIdeaLabOrchestrator
-from config.personas import PERSONA_CONFIGS, PersonaType, ORCHESTRATOR_CONFIG, SELECTED_MODEL
+from config.personas import PERSONA_CONFIGS, PersonaType, ORCHESTRATOR_CONFIG
 from config.models import get_model_display_options, MODEL_CONFIGS, ModelType, DEFAULT_MODEL
-import config.personas as personas
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
@@ -48,35 +47,22 @@ def create_session():
     )
     return session, session_id
 
-def update_selected_model():
-    """
-    UI에서 선택된 모델 ID로 전역 SELECTED_MODEL 변수를 업데이트
-    """
-    # 선택된 모델 ID를 가져옴
-    model_id = st.session_state.selected_model
-    
-    # personas.py의 SELECTED_MODEL 전역 변수 업데이트
-    personas.SELECTED_MODEL = model_id
-    
-    # 디버깅/확인용 메시지 (제품 환경에서는 제거)
-    st.success(f"모델이 '{model_id}'(으)로 변경되었습니다.")
-
 async def analyze_idea(idea_text, session, session_id):
     """
-    사용자 아이디어를 멀티 페르소나로 분석하고 최종 요약을 생성하는 함수
+    아이디어를 분석하고 결과를 반환하는 함수
     
     Args:
-        idea_text (str): 사용자가 입력한 아이디어 텍스트
+        idea_text (str): 분석할 아이디어 텍스트
         session: 현재 세션 객체
         session_id (str): 세션 ID
         
     Returns:
         dict: 각 페르소나별 분석 결과와 최종 요약
     """
-    # 오케스트레이터 생성
-    orchestrator = AIdeaLabOrchestrator()
+    # 오케스트레이터 생성 - 선택된 모델 명시적 전달
+    orchestrator = AIdeaLabOrchestrator(model_name=st.session_state.selected_model)
     
-    # 세션 상태에 아이디어 저장 (run_all_personas_sequentially 내부에서도 처리하지만, 여기서도 명시적으로 수행 가능)
+    # 세션 상태에 아이디어 저장
     current_session = session_service.get_session(app_name=APP_NAME, user_id=USER_ID, session_id=session_id)
     if not current_session: # 세션이 없을 경우 (create_session 직후)
          current_session = session
@@ -85,14 +71,33 @@ async def analyze_idea(idea_text, session, session_id):
     # 결과 저장 딕셔너리
     results = {}
     
-    # 1. 페르소나 순차 분석 실행 (수정된 부분)
-    await orchestrator.run_all_personas_sequentially( # await 추가
-        session_service=session_service,
+    # 워크플로우 에이전트(SequentialAgent) 가져오기
+    workflow_agent = orchestrator.get_workflow_agent()
+    
+    # 사용자 아이디어로 메시지 생성
+    content = types.Content(
+        role="user",
+        parts=[types.Part(text=f"다음 아이디어를 분석해주세요: {idea_text}")]
+    )
+    
+    # 단일 Runner를 사용하여 워크플로우 에이전트 실행
+    runner = Runner(
+        agent=workflow_agent,
         app_name=APP_NAME,
+        session_service=session_service
+    )
+    
+    # 에이전트 실행
+    events = runner.run(
         user_id=USER_ID,
         session_id=session_id,
-        idea_text=idea_text
+        new_message=content
     )
+    
+    # 이벤트 처리
+    for event in events:
+        if event.is_final_response():
+            break
             
     # 세션에서 각 페르소나의 결과 가져오기
     updated_session = session_service.get_session(
@@ -104,45 +109,8 @@ async def analyze_idea(idea_text, session, session_id):
     output_keys = orchestrator.get_output_keys()
     if updated_session and hasattr(updated_session, 'state'):
         for persona_key_name, state_key in output_keys.items():
-            if persona_key_name != "summary" and state_key in updated_session.state:
+            if state_key in updated_session.state:
                 results[persona_key_name] = updated_session.state[state_key]
-
-    # 2. 최종 요약 생성
-    summary_runner = Runner(
-        agent=orchestrator.get_summary_agent(),
-        app_name=APP_NAME,
-        session_service=session_service # 동일 세션 사용
-    )
-    
-    summary_content_parts = [types.Part(text=f"아이디어 '''{idea_text}'''와 이전 분석 내용들을 바탕으로 최종 요약을 생성해주세요.")]
-    
-    summary_content = types.Content(
-        role="user", 
-        parts=summary_content_parts
-    )
-
-    summary_events = summary_runner.run(
-        user_id=USER_ID,
-        session_id=session_id, # 동일 세션 ID 사용
-        new_message=summary_content
-    )
-
-    for event in summary_events:
-        if event.is_final_response():
-            break
-
-    # 세션에서 최종 요약 결과 가져오기
-    final_session = session_service.get_session(
-        app_name=APP_NAME,
-        user_id=USER_ID,
-        session_id=session_id
-    )
-
-    summary_key = output_keys["summary"]
-    if final_session and hasattr(final_session, 'state') and summary_key in final_session.state:
-        results["summary"] = final_session.state[summary_key]
-    else: # 요약 생성 실패 또는 키 부재 시 명시적 None 또는 빈 문자열 처리
-        results["summary"] = None
             
     return results
 
@@ -187,7 +155,7 @@ def main():
         
         # 모델 적용 버튼
         if st.button("모델 변경 적용"):
-            update_selected_model()
+            st.success(f"모델이 '{st.session_state.selected_model}'(으)로 설정되었습니다.")
     
     idea_text = st.text_area(
         "아이디어를 입력해주세요:",
@@ -203,9 +171,6 @@ def main():
             if not api_key or api_key == "YOUR_API_KEY":
                 st.error("GOOGLE_API_KEY가 .env 파일에 설정되지 않았거나 유효하지 않습니다. 확인해주세요.")
             else:
-                # 분석 요청 전 선택된 모델 적용
-                update_selected_model()
-                
                 # create_session() 호출 시 반환되는 session 객체를 사용
                 current_session, session_id = create_session() 
                 st.session_state.session_counter += 1

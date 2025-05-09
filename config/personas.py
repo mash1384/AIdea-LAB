@@ -93,8 +93,4 @@ PERSONA_SEQUENCE = [
     PersonaType.MARKETER,  # 1. 창의적 마케터 (긍정적 가능성 분석)
     PersonaType.CRITIC,    # 2. 비판적 분석가 (위험 요소 및 문제점 분석)
     PersonaType.ENGINEER,  # 3. 현실적 엔지니어 (기술적 구현 방안 분석)
-]
-
-# 전역 모델 설정 - 기본값은 models.py에서 가져옴
-# 이 값은 UI에서 모델 선택 시 업데이트됨
-SELECTED_MODEL = DEFAULT_MODEL.value 
+] 

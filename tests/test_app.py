@@ -1,4 +1,5 @@
 import pytest
+import asyncio
 from unittest.mock import patch, MagicMock
 # streamlit을 직접 임포트할 필요는 없지만, app.py가 임포트하므로 테스트 환경에 따라 필요할 수 있습니다.
 # import streamlit as st
@@ -24,6 +25,8 @@ def mock_streamlit():
         mock_session_state.session_counter = 0
         # st.session_state.get('session_counter', 0)을 모킹
         mock_session_state.get.return_value = 0
+        # 선택된 모델 세션 상태 설정
+        mock_session_state.selected_model = "gemini-1.0-pro"
         yield mock_session_state
 
 @pytest.fixture
@@ -48,6 +51,24 @@ def mock_runner():
         mock_runner_instance.run.return_value = [mock_event]
         yield mock_runner_instance
 
+@pytest.fixture
+def mock_orchestrator():
+    """AIdeaLabOrchestrator 클래스를 모킹하는 fixture"""
+    with patch("src.ui.app.AIdeaLabOrchestrator") as mock_orchestrator_class:
+        mock_orchestrator_instance = mock_orchestrator_class.return_value
+        
+        # 오케스트레이터의 메서드 모킹
+        mock_workflow_agent = MagicMock()
+        mock_orchestrator_instance.get_workflow_agent.return_value = mock_workflow_agent
+        mock_orchestrator_instance.get_output_keys.return_value = {
+            "marketer": "marketer_response",
+            "critic": "critic_response",
+            "engineer": "engineer_response",
+            "summary": "final_summary"
+        }
+        
+        yield mock_orchestrator_class, mock_orchestrator_instance, mock_workflow_agent
+
 def test_create_session(mock_streamlit, mock_app_session_service): # 수정된 픽스처 이름 사용
     """세션 생성 함수 테스트"""
     mock_service, dummy_session_obj = mock_app_session_service
@@ -66,34 +87,48 @@ def test_create_session(mock_streamlit, mock_app_session_service): # 수정된 �
     )
     assert returned_session == dummy_session_obj
 
-def test_analyze_idea(mock_app_session_service, mock_runner): # 수정된 픽스처 이름 사용
+@pytest.mark.asyncio
+async def test_analyze_idea(mock_streamlit, mock_app_session_service, mock_runner, mock_orchestrator): # 수정된 픽스처 이름 사용
     """아이디어 분석 함수 테스트"""
     mock_service, dummy_session = mock_app_session_service
+    mock_orchestrator_class, mock_orchestrator_instance, mock_workflow_agent = mock_orchestrator
+    
+    # 세션 상태에 결과 설정 (각 페르소나 및 요약 결과)
+    dummy_session.state = {
+        "initial_idea": "테스트 아이디어",
+        "marketer_response": "마케터 분석 결과",
+        "critic_response": "비평가 분석 결과",
+        "engineer_response": "엔지니어 분석 결과",
+        "final_summary": "최종 요약 결과"
+    }
 
-    with patch("src.ui.app.CriticPersonaAgent") as mock_critic_agent_class:
-        mock_critic_agent_instance = mock_critic_agent_class.return_value
-        mock_critic_agent_instance.get_agent.return_value = MagicMock()
-        mock_critic_agent_instance.get_output_key.return_value = "critic_response"
+    # analyze_idea 비동기 함수 호출
+    results = await analyze_idea("테스트 아이디어", dummy_session, "test_session_id")
 
-        # dummy_session.state는 초기에 비어있으므로,
-        # updated_session.state.get("critic_response", response_text)는
-        # response_text ("모의 분석 결과입니다.")를 반환할 것입니다.
-        # 따라서 dummy_session.state를 미리 설정할 필요가 없습니다.
-
-        # analyze_idea에 전달되는 session 인자는 dummy_session입니다.
-        # analyze_idea 내부에서 session_service.get_session() 호출 시에도
-        # mock_app_session_service에 의해 동일한 dummy_session이 반환됩니다.
-        result = analyze_idea("테스트 아이디어", dummy_session, "test_session_id")
-
-        # 검증
-        assert result == "모의 분석 결과입니다." # Runner가 세션 상태를 업데이트하지 않으므로, LLM 이벤트의 텍스트가 반환됨
-        assert dummy_session.state["initial_idea"] == "테스트 아이디어" # 이 부분은 analyze_idea가 직접 설정
-        mock_runner.run.assert_called_once()
-        mock_service.get_session.assert_called_once_with(
-            app_name=APP_NAME,
-            user_id=USER_ID,
-            session_id="test_session_id"
-        )
+    # 검증
+    # 1. AIdeaLabOrchestrator가 올바른 model_name으로 생성되었는지 확인
+    mock_orchestrator_class.assert_called_once_with(model_name=mock_streamlit.selected_model)
+    
+    # 2. 워크플로우 에이전트를 가져오는 get_workflow_agent 메서드가 호출되었는지 확인
+    mock_orchestrator_instance.get_workflow_agent.assert_called_once()
+    
+    # 3. Runner가 올바른 워크플로우 에이전트로 생성되었는지 확인
+    from src.ui.app import Runner
+    Runner.assert_called_once_with(
+        agent=mock_workflow_agent,
+        app_name="AIdea Lab",
+        session_service=mock_service
+    )
+    
+    # 4. 결과 딕셔너리에 모든 페르소나의 결과와 요약이 포함되어 있는지 확인
+    assert "marketer" in results
+    assert "critic" in results
+    assert "engineer" in results
+    assert "summary" in results
+    assert results["marketer"] == "마케터 분석 결과"
+    assert results["critic"] == "비평가 분석 결과"
+    assert results["engineer"] == "엔지니어 분석 결과"
+    assert results["summary"] == "최종 요약 결과"
 
 # if __name__ == "__main__": # 테스트 파일에서 이 부분은 일반적으로 제거합니다.
 #     pytest.main(["-v", __file__])

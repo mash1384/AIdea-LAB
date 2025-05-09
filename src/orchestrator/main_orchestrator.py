@@ -7,13 +7,13 @@ AIdea Lab 오케스트레이터
 
 import os
 from dotenv import load_dotenv
-from google.adk.agents import Agent
+from google.adk.agents import Agent, SequentialAgent
 from google.adk.runners import Runner
-from google.adk.sessions import Session
 from google.genai import types
 
-from config.prompts import ORCHESTRATOR_PROMPT, FINAL_SUMMARY_PROMPT
-from config.personas import PersonaType, PERSONA_CONFIGS, PERSONA_SEQUENCE, ORCHESTRATOR_CONFIG, SELECTED_MODEL
+from config.prompts import FINAL_SUMMARY_PROMPT
+from config.personas import PersonaType, PERSONA_CONFIGS, PERSONA_SEQUENCE, ORCHESTRATOR_CONFIG
+from config.models import DEFAULT_MODEL
 
 from src.agents.marketer_agent import MarketerPersonaAgent
 from src.agents.critic_agent import CriticPersonaAgent
@@ -25,15 +25,23 @@ load_dotenv()
 class AIdeaLabOrchestrator:
     """아이디어 워크숍 오케스트레이터 클래스"""
     
-    def __init__(self):
-        """오케스트레이터 초기화"""
+    def __init__(self, model_name=None):
+        """
+        오케스트레이터 초기화
+        
+        Args:
+            model_name (str, optional): 사용할 모델 이름. 기본값은 DEFAULT_MODEL.value
+        """
+        # 기본 모델 설정
+        self.model_name = model_name or DEFAULT_MODEL.value
+        
         # 오케스트레이터 설정 가져오기
         self.config = ORCHESTRATOR_CONFIG
         
-        # 페르소나 에이전트들 생성
-        self.marketer_agent = MarketerPersonaAgent()
-        self.critic_agent = CriticPersonaAgent()
-        self.engineer_agent = EngineerPersonaAgent()
+        # 페르소나 에이전트들 생성 - model_name 전달
+        self.marketer_agent = MarketerPersonaAgent(model_name=self.model_name)
+        self.critic_agent = CriticPersonaAgent(model_name=self.model_name)
+        self.engineer_agent = EngineerPersonaAgent(model_name=self.model_name)
         
         # 순차적으로 실행할 에이전트들의 순서 설정
         self.agents = []
@@ -53,24 +61,23 @@ class AIdeaLabOrchestrator:
         
         self.summary_agent = Agent(
             name="summary_agent",
-            model=SELECTED_MODEL,
+            model=self.model_name,
             description="최종 요약 생성 에이전트",
             instruction=FINAL_SUMMARY_PROMPT,
             output_key=self.config["summary_output_key"],
             generate_content_config=generate_config
         )
         
-        # 커스텀 에이전트로 대체하여 에이전트들을 직접 관리
-        self.orchestrator_agent = Agent(
-            name="aidea_lab_orchestrator",
-            model=SELECTED_MODEL,
-            description="AIdea Lab 워크숍 오케스트레이터",
-            instruction=ORCHESTRATOR_PROMPT
+        # SequentialAgent 생성하여 모든 페르소나 에이전트와 요약 에이전트를 포함
+        self.workflow_agent = SequentialAgent(
+            name="aidea_lab_workflow",
+            description="AIdea Lab 워크숍 시퀀스",
+            sub_agents=[*self.agents, self.summary_agent]
         )
     
-    def get_sequential_agent(self):
-        """오케스트레이터 에이전트 반환"""
-        return self.orchestrator_agent
+    def get_workflow_agent(self):
+        """워크플로우 에이전트(SequentialAgent) 반환"""
+        return self.workflow_agent
     
     def get_summary_agent(self):
         """요약 에이전트 반환"""
@@ -83,44 +90,4 @@ class AIdeaLabOrchestrator:
             "critic": self.critic_agent.get_output_key(),
             "engineer": self.engineer_agent.get_output_key(),
             "summary": self.config["summary_output_key"]
-        }
-        
-    async def run_all_personas_sequentially(self, session_service, app_name, user_id, session_id, idea_text):
-        """
-        페르소나 에이전트들을 순차적으로 실행하는 함수
-        """
-        session = session_service.get_session(app_name=app_name, user_id=user_id, session_id=session_id)
-        
-        # 아이디어가 세션 상태에 있는지 확인하고 없으면 저장
-        if "initial_idea" not in session.state:
-            session.state["initial_idea"] = idea_text
-            
-        # 각 페르소나를 순서대로 실행
-        for i, agent in enumerate(self.agents):
-            persona_type = PERSONA_SEQUENCE[i]
-            content = types.Content(
-                role="user",
-                parts=[types.Part(text=f"다음 아이디어를 분석해주세요: {idea_text}")]
-            )
-            
-            # Runner 생성 및 실행
-            runner = Runner(
-                agent=agent,
-                app_name=app_name,
-                session_service=session_service
-            )
-            
-            # 에이전트 실행
-            events = runner.run(
-                user_id=user_id,
-                session_id=session_id,
-                new_message=content
-            )
-            
-            # 이벤트 처리
-            for event in events:
-                if event.is_final_response():
-                    break
-        
-        # 업데이트된 세션 반환
-        return session_service.get_session(app_name=app_name, user_id=user_id, session_id=session_id) 
+        } 

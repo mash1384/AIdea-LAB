@@ -1,0 +1,5 @@
+
+*   **프론트엔드**: Streamlit (실시간 채팅 UI 구현: `st.chat_message`, `st.chat_input`, `st.write_stream` 등 적극 활용).
+*   **백엔드/AI**: Python, Google ADK, Google Generative AI (Gemini 모델).
+*   **시스템 안내 메시지 처리**: Python 내 문자열 템플릿 또는 단순 조건부 로직 (LLM 불필요).
+*   **세션 및 상태 관리**: ADK의 `InMemorySessionService` 및 `session.state`.

@@ -17,7 +17,8 @@ from google.genai import types
 # 프로젝트 루트 디렉토리를 sys.path에 추가
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from src.orchestrator.main_orchestrator import AIdeaLabOrchestrator
-from config.personas import PERSONA_CONFIGS, PersonaType, ORCHESTRATOR_CONFIG
+from src.session_manager import SessionManager  # 새로 추가된 SessionManager import
+from config.personas import PERSONA_CONFIGS, PersonaType, ORCHESTRATOR_CONFIG, PERSONA_SEQUENCE
 from config.models import get_model_display_options, MODEL_CONFIGS, ModelType, DEFAULT_MODEL
 
 # .env 파일에서 환경 변수 로드
@@ -34,8 +35,8 @@ st.set_page_config(
 APP_NAME = "AIdea Lab"
 USER_ID = "streamlit_user"
 
-# 세션 서비스 초기화
-session_service = InMemorySessionService()
+# 세션 관리자 초기화
+session_manager = SessionManager(APP_NAME, USER_ID)
 
 # 시스템 안내 메시지 템플릿 정의
 SYSTEM_MESSAGES = {
@@ -50,90 +51,217 @@ SYSTEM_MESSAGES = {
     "analysis_end": "🏁 분석을 종료합니다. 새로운 아이디어가 있다면 언제든지 다시 찾아주세요!",
 }
 
-def show_system_message(message_key, rerun=False):
-    """시스템 안내 메시지를 채팅창에 표시합니다"""
+# 텍스트 데이터를 표시용으로 처리하는 함수
+def process_text_for_display(text_data):
+    """
+    텍스트 데이터를 표시용으로 처리하는 함수
+    
+    Args:
+        text_data: 처리할 텍스트 또는 데이터
+        
+    Returns:
+        처리된 텍스트
+    """
+    # 텍스트 데이터가 문자열이 아닌 경우 문자열로 변환
+    if not isinstance(text_data, str):
+        text_data = str(text_data)
+    
+    return text_data
+
+def add_message(role, content, avatar=None):
+    """
+    메시지를 세션 상태에 추가하는 통합 함수 (UI에 직접 표시하지 않음)
+    
+    Args:
+        role (str): 메시지 역할 ('user', 'assistant')
+        content (str): 메시지 내용
+        avatar (str, optional): 아바타 이모지
+    """
+    # 중복 메시지 방지
+    if any(msg.get("role") == role and msg.get("content") == content for msg in st.session_state.messages):
+        return
+        
+    # 메시지 세션 상태에 추가
+    st.session_state.messages.append({
+        "role": role,
+        "content": content,
+        "avatar": avatar
+    })
+
+def show_system_message(message_key):
+    """시스템 안내 메시지를 세션 상태에 추가합니다 (UI에 직접 표시하지 않음)"""
     if message_key in SYSTEM_MESSAGES:
-        st.session_state.messages.append({
-            "role": "assistant", 
-            "avatar": "⚙️", 
-            "content": SYSTEM_MESSAGES[message_key]
-        })
-        if rerun:
-            st.rerun()  # UI 즉시 업데이트
+        message_content = SYSTEM_MESSAGES[message_key]
+        add_message("assistant", message_content, avatar="⚙️")
 
-def create_session():
-    """새로운 세션 생성"""
-    session_id = f"session_{st.session_state.get('session_counter', 0)}"
-    session = session_service.create_session(
-        app_name=APP_NAME,
-        user_id=USER_ID,
-        session_id=session_id
-    )
-    return session, session_id
+# 1단계 분석을 위한 함수
+def run_phase1_analysis_and_update_ui(idea_text):
+    """1단계 분석을 실행하고 결과를 저장합니다."""
+    try:
+        # 분석 상태 설정
+        st.session_state.analysis_phase = "phase1_running"
+        st.session_state.phase1_step = "analysis_started"
+        
+        # 분석 시작 메시지 저장 (UI에 즉시 표시하지 않음)
+        show_system_message("analysis_start")
 
-async def analyze_idea(idea_text, session, session_id):
-    # ...
-    orchestrator = AIdeaLabOrchestrator(model_name=st.session_state.selected_model)
-    
-    current_session = session_service.get_session(app_name=APP_NAME, user_id=USER_ID, session_id=session_id)
-    if not current_session:
-         current_session = session
-    current_session.state["initial_idea"] = idea_text
+        # 사용자 추가 정보 가져오기
+        user_goal = st.session_state.get("user_goal", "")
+        user_constraints = st.session_state.get("user_constraints", "")
+        user_values = st.session_state.get("user_values", "")
+        
+        # 세션 관리자를 통해 새 세션 시작
+        session, session_id = session_manager.start_new_idea_session(
+            initial_idea=idea_text,
+            user_goal=user_goal,
+            user_constraints=user_constraints,
+            user_values=user_values
+        )
+        
+        # Streamlit 세션 상태에 ADK 세션 ID 저장
+        st.session_state.adk_session_id = session_id
+        
+        # 오케스트레이터 생성
+        orchestrator = AIdeaLabOrchestrator(model_name=st.session_state.selected_model)
+        
+        # 1단계 워크플로우 에이전트 가져오기
+        phase1_workflow_agent = orchestrator.get_phase1_workflow()
+        
+        # Runner 생성
+        runner = Runner(
+            agent=phase1_workflow_agent,
+            app_name=APP_NAME,
+            session_service=session_manager.session_service
+        )
 
-    results = {}
+        # Runner 실행을 위한 초기 메시지
+        initial_content_for_runner = types.Content(
+            role="user", 
+            parts=[types.Part(text=f"다음 아이디어에 대한 1단계 분석을 시작합니다: {idea_text}")]
+        )
+
+        # Runner 실행 (동기 방식으로 변경)
+        asyncio.run(_run_phase1_analysis(runner, USER_ID, session_id, initial_content_for_runner, phase1_workflow_agent))
+        
+        # 최신 세션 상태 가져오기
+        current_session = session_manager.get_session(session_id)
+        if not current_session:
+            raise Exception("세션을 찾을 수 없습니다.")
+        
+        # 1단계 output 키 맵 가져오기
+        output_keys = orchestrator.get_output_keys_phase1()
+        
+        # 모든 페르소나 결과를 한 번에 저장하여 UI 업데이트 최소화
+        all_results_collected = []
+        
+        # 페르소나 순서에 맞게 결과 저장
+        for persona_type in PERSONA_SEQUENCE:
+            if persona_type == PersonaType.MARKETER:
+                persona_key = "marketer"
+            elif persona_type == PersonaType.CRITIC:
+                persona_key = "critic"
+            elif persona_type == PersonaType.ENGINEER:
+                persona_key = "engineer"
+            else:
+                continue
+                
+            # 해당 페르소나의 output_key 가져오기
+            output_key = output_keys.get(persona_key)
+            if not output_key or output_key not in current_session.state:
+                # 디버깅을 위한 로그
+                print(f"Warning: {persona_key}의 결과를 찾을 수 없습니다. 키: {output_key}")
+                continue
+                
+            # 페르소나 소개 메시지 및 분석 결과를 수집
+            intro_message_key = f"{persona_key}_intro"
+            persona_response = current_session.state.get(output_key)
+            
+            if persona_response:
+                # 페르소나 아이콘 가져오기
+                if persona_key == "marketer":
+                    avatar_icon = PERSONA_CONFIGS[PersonaType.MARKETER].get("icon", "💡")
+                elif persona_key == "critic":
+                    avatar_icon = PERSONA_CONFIGS[PersonaType.CRITIC].get("icon", "🔍")
+                elif persona_key == "engineer":
+                    avatar_icon = PERSONA_CONFIGS[PersonaType.ENGINEER].get("icon", "⚙️")
+                else:
+                    avatar_icon = "🤖"
+                
+                # 소개 메시지와 결과를 수집 (아직 session_state에 추가하지 않음)
+                all_results_collected.append({
+                    "intro_key": intro_message_key,
+                    "content": process_text_for_display(persona_response),
+                    "avatar": avatar_icon
+                })
+        
+        # 최종 요약 결과 수집
+        summary_key = output_keys.get("summary_phase1")
+        summary_result = None
+        if summary_key and summary_key in current_session.state:
+            summary_response = current_session.state.get(summary_key)
+            if summary_response:
+                summary_icon = ORCHESTRATOR_CONFIG.get("icon", "📝")
+                summary_result = {
+                    "intro_key": "summary_intro",
+                    "content": process_text_for_display(summary_response),
+                    "avatar": summary_icon
+                }
+        
+        # 이제 모든 결과를 세션 상태에 한 번에 추가 (UI 갱신 최소화)
+        for result in all_results_collected:
+            # 먼저 소개 메시지 추가
+            show_system_message(result["intro_key"])
+            # 그 다음 분석 결과 추가
+            add_message("assistant", result["content"], avatar=result["avatar"])
+        
+        # 최종 요약 결과 추가
+        if summary_result:
+            show_system_message(summary_result["intro_key"])
+            add_message("assistant", summary_result["content"], avatar=summary_result["avatar"])
+        
+        # 1단계 분석 완료 처리
+        st.session_state.analysis_phase = "phase1_complete"
+        st.session_state.phase1_step = "complete"
+        st.session_state.analyzed_idea = idea_text  # 분석 완료된 아이디어 기록
+        
+        # 1단계 완료 메시지 저장
+        show_system_message("phase1_complete")
+        
+        # 분석 완료 표시 (단 한 번만 UI 업데이트 트리거)
+        st.session_state.need_rerun = True
+
+    except Exception as e:
+        error_message = f"분석 중 오류가 발생했습니다: {str(e)}"
+        
+        # 오류 메시지 저장
+        add_message("assistant", error_message, avatar="⚠️")
+        
+        # 디버깅용 로그
+        print(f"Error in run_phase1_analysis_and_update_ui: {str(e)}")
+        
+        st.session_state.analysis_phase = "error"
+        st.session_state.phase1_step = "error"
+        st.session_state.need_rerun = True
+
+# SequentialAgent 실행 및 결과 기다리는 비동기 함수
+async def _run_phase1_analysis(runner, user_id, session_id, initial_content, phase1_workflow_agent):
+    """SequentialAgent를 실행하고 완료될 때까지 기다립니다."""
     
-    workflow_agent = orchestrator.get_workflow_agent()
-    
-    content = types.Content(
-        role="user",
-        parts=[types.Part(text=f"다음 아이디어를 분석해주세요: {idea_text}")]
-    )
-    
-    runner = Runner(
-        agent=workflow_agent,
-        app_name=APP_NAME,
-        session_service=session_service
-    )
-    
-    # 에이전트 비동기 실행 결과를 변수에 할당 (await 없이)
+    # Runner 실행 및 최종 결과 기다리기
     event_stream = runner.run_async(
-        user_id=USER_ID,
+        user_id=user_id,
         session_id=session_id,
-        new_message=content
+        new_message=initial_content
     )
     
-    # 이벤트 비동기 처리 (event_stream 사용)
-    async for event in event_stream: # 수정된 변수명 사용
-        if event.is_final_response():
-            # 최종 응답 처리 로직 (필요하다면)
-            # 예를 들어, 최종 응답 내용을 별도로 저장하거나 할 수 있습니다.
-            # 현재 코드는 단순히 break만 하고 있어서, 
-            # SequentialAgent의 마지막 에이전트(summary_agent)의 최종 응답이 나올 때까지 기다리게 됩니다.
-            # 이는 SequentialAgent가 모든 하위 에이전트를 실행하고 
-            # 그 결과가 session.state에 누적되도록 하는 올바른 흐름입니다.
-            pass # 특별한 처리가 없다면 pass 또는 break 유지
-            
-    # 세션에서 각 페르소나의 결과 가져오기
-    updated_session = session_service.get_session(
-        app_name=APP_NAME,
-        user_id=USER_ID,
-        session_id=session_id
-    )
-    
-    output_keys = orchestrator.get_output_keys()
-    if updated_session and hasattr(updated_session, 'state'):
-        for persona_key_name, state_key in output_keys.items():
-            if state_key in updated_session.state:
-                results[persona_key_name] = updated_session.state[state_key]
-            
-    return results
-
-# (상단 import 및 설정은 기존과 동일)
-
-# ... create_session, analyze_idea 함수 정의는 기존과 유사하게 유지 ...
-# analyze_idea 함수는 이제 채팅 메시지를 st.session_state.messages에 직접 추가하고,
-# UI 업데이트는 main 루프에서 st.session_state.messages를 다시 그리는 방식으로 변경될 수 있습니다.
-# 또는 analyze_idea 내에서 st.chat_message().write_stream()을 직접 호출할 수도 있습니다.
+    # SequentialAgent 전체 실행이 완료될 때까지 기다림
+    # 중간 스트리밍 결과를 건너뛰고 최종 결과만 기다림 (스크롤 문제 해결)
+    async for event in event_stream:
+        # SequentialAgent의 최종 완료 이벤트 확인
+        if event.is_final_response() and hasattr(event, 'agent_name') and event.agent_name == phase1_workflow_agent.name:
+            # SequentialAgent의 실행이 완료됨
+            print(f"SequentialAgent completed: {phase1_workflow_agent.name}")
+            break
 
 def initialize_session_state():
     """세션 상태 초기화"""
@@ -147,6 +275,8 @@ def initialize_session_state():
     # 채팅 관련 세션 상태 초기화
     if 'messages' not in st.session_state:
         st.session_state.messages = [] # {"role": "user/assistant/system", "content": "...", "avatar": "🧑‍💻/🧠/⚙️"}
+        # 초기 환영 메시지 추가 (메시지 초기화 시 한 번만 추가)
+        add_message("assistant", SYSTEM_MESSAGES["welcome"], avatar="⚙️")
     
     # 아이디어 및 분석 상태
     if 'current_idea' not in st.session_state: # 사용자가 현재 입력한 아이디어 (분석 전)
@@ -167,109 +297,19 @@ def initialize_session_state():
         st.session_state.user_values = ""
     if 'show_additional_info' not in st.session_state: # 추가 정보 입력 필드 표시 여부
         st.session_state.show_additional_info = False
-    # ... 기타 필요한 상태 변수들 ...
+    if 'need_rerun' not in st.session_state: # rerun 필요 여부 플래그
+        st.session_state.need_rerun = False
 
-# 1단계 분석을 위한 비동기 래퍼 함수 (UI 업데이트 포함)
-async def run_phase1_analysis_and_update_ui(idea_text, adk_session_id_to_use):
-    """1단계 분석을 실행하고 UI에 결과를 스트리밍합니다."""
-    try:
-        st.session_state.analysis_phase = "phase1_running"
-        st.session_state.phase1_step = "analysis_started"
-
-        # ADK 세션 가져오기 또는 생성 (create_session 함수 활용)
-        current_adk_session = session_service.get_session(app_name=APP_NAME, user_id=USER_ID, session_id=adk_session_id_to_use)
-        if not current_adk_session:
-            st.error("ADK 세션을 찾을 수 없습니다.")
-            st.session_state.analysis_phase = "error"
-            return
-
-        # 사용자 목표/제약 등 추가 정보 ADK 세션에 저장
-        current_adk_session.state["initial_idea"] = idea_text
-        if st.session_state.get("user_goal"):
-            current_adk_session.state["user_goal"] = st.session_state.user_goal
-        if st.session_state.get("user_constraints"):
-            current_adk_session.state["user_constraints"] = st.session_state.user_constraints
-        if st.session_state.get("user_values"):
-            current_adk_session.state["user_values"] = st.session_state.user_values
-
-        orchestrator = AIdeaLabOrchestrator(model_name=st.session_state.selected_model)
-        phase1_workflow_agent = orchestrator.get_phase1_workflow()  # 1단계용 워크플로우 에이전트 사용
-
-        runner = Runner(
-            agent=phase1_workflow_agent,
-            app_name=APP_NAME,
-            session_service=session_service
-        )
-
-        # Runner 실행을 위한 초기 메시지
-        initial_content_for_runner = types.Content(role="user", parts=[types.Part(text=f"다음 아이디어에 대한 1단계 분석을 시작합니다: {idea_text}")])
-
-        event_stream = runner.run_async(
-            user_id=USER_ID,
-            session_id=adk_session_id_to_use,
-            new_message=initial_content_for_runner
-        )
-
-        # 각 페르소나의 이름을 미리 정의 (output_key와 매칭되도록)
-        persona_names_in_order = [
-            (orchestrator.marketer_agent.get_output_key(), "마케터", "💡", "marketer_intro"), # (output_key, 표시이름, 아이콘, 소개메시지키)
-            (orchestrator.critic_agent.get_output_key(), "비판적 분석가", "🔍", "critic_intro"),
-            (orchestrator.engineer_agent.get_output_key(), "현실적 엔지니어", "⚙️", "engineer_intro"),
-            (orchestrator.summary_agent.get_output_key(), "1단계 요약", "📝", "summary_intro") # summary_agent는 orchestrator 내에 정의되어 있음
-        ]
-        
-        current_persona_index = 0
-
-        async for event in event_stream:
-            if event.is_final_response() and event.agent_name != phase1_workflow_agent.name: # SequentialAgent 자체의 최종 응답이 아닌, sub_agent의 최종 응답
-                if current_persona_index < len(persona_names_in_order):
-                    output_key, display_name, avatar_icon, intro_message_key = persona_names_in_order[current_persona_index]
-                    
-                    # 페르소나 소개 메시지 표시 (rerun 없이 메시지만 추가)
-                    show_system_message(intro_message_key, rerun=True)
-                    
-                    # 페르소나 단계 상태 업데이트
-                    st.session_state.phase1_step = f"{display_name.lower().replace(' ', '_')}_analyzing"
-                    
-                    # 해당 output_key로 session.state에서 결과 가져오기
-                    updated_adk_session = session_service.get_session(app_name=APP_NAME, user_id=USER_ID, session_id=adk_session_id_to_use)
-                    persona_response = updated_adk_session.state.get(output_key)
-
-                    if persona_response:
-                        # 실제 페르소나 응답 스트리밍
-                        async def stream_data(text_data):
-                            for chunk in text_data.split(): # 간단한 예시: 단어 단위
-                                yield chunk + " "
-                                await asyncio.sleep(0.02) # 약간의 딜레이로 스트리밍 효과
-
-                        with st.chat_message("assistant", avatar=avatar_icon):
-                            st.write_stream(stream_data(persona_response))
-                        
-                        st.session_state.messages.append({"role": "assistant", "avatar": avatar_icon, "content": persona_response})
-                        current_persona_index += 1
-                        
-                        # 다음 페르소나를 위한 UI 업데이트
-                        if current_persona_index < len(persona_names_in_order):
-                            # 다음 페르소나로 진행하기 전에 잠시 지연
-                            await asyncio.sleep(0.5)
-                
-                if current_persona_index >= len(persona_names_in_order): # 모든 sub_agent 완료
-                    break 
-        
-        st.session_state.analysis_phase = "phase1_complete"
-        st.session_state.phase1_step = "complete"
-        st.session_state.analyzed_idea = idea_text # 분석 완료된 아이디어 기록
-        
-        # 1단계 완료 메시지 표시
-        show_system_message("phase1_complete")
-
-    except Exception as e:
-        error_message = f"분석 중 오류가 발생했습니다: {str(e)}"
-        st.session_state.messages.append({"role": "assistant", "avatar": "⚠️", "content": error_message})
-        st.session_state.analysis_phase = "error"
-        st.session_state.phase1_step = "error"
-    finally:
-        st.rerun() # UI 최종 업데이트
+def update_setting(key, value):
+    """
+    설정을 업데이트하는 함수
+    
+    Args:
+        key (str): 업데이트할 설정 키
+        value: 설정할 값
+    """
+    # 설정 업데이트
+    setattr(st.session_state, key, value)
 
 def main():
     """메인 애플리케이션 함수"""
@@ -277,129 +317,157 @@ def main():
     
     initialize_session_state()
     
-    model_options = get_model_display_options()
+    # 설명 텍스트와 고급 설정을 포함할 사이드 영역 컨테이너
+    side_content = st.container()
     
-    # 초기 환영 메시지가 없는 경우에만 추가 (세션 시작 시 딱 한번만)
-    if len(st.session_state.messages) == 0:
-        show_system_message("welcome")
+    # 채팅 메시지를 표시할 전용 컨테이너 (명확한 채팅 영역 생성)
+    chat_area = st.container()
     
-    # 상태에 따른 조건부 처리
-    if st.session_state.phase1_step == "idea_submitted" and st.session_state.analysis_phase == "idle":
-        # 아이디어는 입력되었지만 아직 분석은 시작되지 않은 상태
-        show_system_message("analysis_start")
-        st.session_state.phase1_step = "analysis_ready"
-        st.rerun()
-    
-    if st.session_state.analysis_phase == "idle": # 초기 상태 또는 이전 분석 완료 후
-        st.markdown("""
-        ### 💡 아이디어 분석 서비스
-        자유롭게 아이디어를 입력하시면, 다양한 AI 페르소나가 여러 관점에서 분석해드리고 최종 정리까지 해드립니다.
-        """)
-    
-    with st.expander("⚙️ 고급 설정"):
-        st.selectbox(
-            "AI 모델 선택:",
-            options=list(model_options.keys()),
-            format_func=lambda x: x,
-            index=list(model_options.values()).index(st.session_state.selected_model),
-            key="model_display_name_selectbox", # 이전 key와 다르게 설정하거나, on_change 콜백 내에서 처리
-            on_change=lambda: setattr(st.session_state, 'selected_model', model_options[st.session_state.model_display_name_selectbox])
-        )
-        current_model_type = next((mt for mt in ModelType if mt.value == st.session_state.selected_model), None)
-        if current_model_type:
-            st.info(f"선택된 모델: {MODEL_CONFIGS[current_model_type]['description']}")
+    # 먼저 사이드 콘텐츠 표시
+    with side_content:
+        # 분석 상태에 따른 설명 텍스트
+        if st.session_state.analysis_phase == "idle": # 초기 상태 또는 이전 분석 완료 후
+            st.markdown("""
+            ### 💡 아이디어 분석 서비스
+            자유롭게 아이디어를 입력하시면, 다양한 AI 페르소나가 여러 관점에서 분석해드리고 최종 정리까지 해드립니다.
+            """)
         
-        # 추가 정보 입력 표시 토글
-        st.checkbox("아이디어에 대한 추가 정보 입력", value=st.session_state.show_additional_info, 
-                     key="show_additional_info_checkbox", on_change=lambda: setattr(st.session_state, 'show_additional_info', 
-                     st.session_state.show_additional_info_checkbox))
-        
-        # 추가 정보 입력 필드 (체크박스 선택 시에만 표시)
-        if st.session_state.show_additional_info:
-            st.text_input("아이디어의 핵심 목표:", key="user_goal_input", 
-                         value=st.session_state.user_goal, 
-                         on_change=lambda: setattr(st.session_state, 'user_goal', st.session_state.user_goal_input),
-                         help="아이디어를 통해 달성하고자 하는 주요 목표를 입력해주세요.")
+        # 고급 설정 expander (Streamlit이 자체적으로 상태 관리하도록 함)
+        with st.expander("⚙️ 고급 설정"):
+            model_options = get_model_display_options()
             
-            st.text_input("주요 제약 조건:", key="user_constraints_input", 
-                         value=st.session_state.user_constraints, 
-                         on_change=lambda: setattr(st.session_state, 'user_constraints', st.session_state.user_constraints_input),
-                         help="아이디어 구현 시 고려해야 할 주요 제약 조건이나 한계를 입력해주세요.")
+            st.selectbox(
+                "AI 모델 선택:",
+                options=list(model_options.keys()),
+                format_func=lambda x: x,
+                index=list(model_options.values()).index(st.session_state.selected_model),
+                key="model_display_name_selectbox",
+                on_change=lambda: update_setting('selected_model', model_options[st.session_state.model_display_name_selectbox])
+            )
             
-            st.text_input("중요 가치:", key="user_values_input", 
-                         value=st.session_state.user_values, 
-                         on_change=lambda: setattr(st.session_state, 'user_values', st.session_state.user_values_input),
-                         help="이 아이디어가 중요하게 여기는 핵심 가치나 원칙을 입력해주세요.")
-
-    # 이전 채팅 메시지 표시
-    for message in st.session_state.messages:
-        avatar = message.get("avatar") # 아바타가 없는 경우 None
-        if not avatar and message["role"] == "assistant": # 기본 AI 아바타
-            avatar = "🧠"
-        with st.chat_message(message["role"], avatar=avatar):
-            st.markdown(message["content"]) # Markdown으로 렌더링
-
+            current_model_type = next((mt for mt in ModelType if mt.value == st.session_state.selected_model), None)
+            if current_model_type:
+                st.info(f"선택된 모델: {MODEL_CONFIGS[current_model_type]['description']}")
+            
+            # 추가 정보 입력 표시 토글
+            st.checkbox(
+                "아이디어에 대한 추가 정보 입력", 
+                value=st.session_state.show_additional_info, 
+                key="show_additional_info_checkbox", 
+                on_change=lambda: update_setting('show_additional_info', st.session_state.show_additional_info_checkbox)
+            )
+            
+            # 추가 정보 입력 필드 (체크박스 선택 시에만 표시)
+            if st.session_state.show_additional_info:
+                st.text_input(
+                    "아이디어의 핵심 목표:", 
+                    key="user_goal_input", 
+                    value=st.session_state.user_goal, 
+                    on_change=lambda: update_setting('user_goal', st.session_state.user_goal_input),
+                    help="아이디어를 통해 달성하고자 하는 주요 목표를 입력해주세요."
+                )
+                
+                st.text_input(
+                    "주요 제약 조건:", 
+                    key="user_constraints_input", 
+                    value=st.session_state.user_constraints, 
+                    on_change=lambda: update_setting('user_constraints', st.session_state.user_constraints_input),
+                    help="아이디어 구현 시 고려해야 할 주요 제약 조건이나 한계를 입력해주세요."
+                )
+                
+                st.text_input(
+                    "중요 가치:", 
+                    key="user_values_input", 
+                    value=st.session_state.user_values, 
+                    on_change=lambda: update_setting('user_values', st.session_state.user_values_input),
+                    help="이 아이디어가 중요하게 여기는 핵심 가치나 원칙을 입력해주세요."
+                )
+    
+    # 이제 채팅 영역 표시 (명확하게 구분된 영역)
+    with chat_area:
+        # 모든 메시지를 채팅 형식으로 표시 (추가 스타일링 없이 기본 Streamlit 채팅 UI 사용)
+        for message in st.session_state.messages:
+            role = message.get("role", "assistant")
+            content = message.get("content", "")
+            avatar = message.get("avatar")
+            
+            # 기본 아바타 처리
+            if not avatar and role == "assistant":
+                avatar = "🧠"
+            
+            # 명시적으로 Streamlit 채팅 UI 요소 사용
+            with st.chat_message(role, avatar=avatar):
+                st.write(content)  # st.markdown 대신 st.write 사용
+    
     # --- 1단계 분석 완료 후 2단계 진행 버튼 ---
     if st.session_state.analysis_phase == "phase1_complete":
-        # 2단계 진행 버튼 (이미 phase1_complete 메시지는 run_phase1_analysis_and_update_ui 함수에서 표시)
+        # 2단계 진행 버튼
         col1, col2 = st.columns(2)
         with col1:
             if st.button("🚀 2단계 토론 시작하기", key="start_phase2_button"):
-                st.session_state.analysis_phase = "phase2_pending" # 또는 "phase2_running"
-                # 2단계 시작 안내 메시지 추가
-                show_system_message("phase2_intro")
-                # 여기에 2단계 분석 실행 로직 호출 (예: asyncio.run(run_phase2_analysis_and_update_ui(...)))
-                st.rerun()
+                # 세션 관리자를 사용하여 Phase 2로 전환
+                if st.session_state.adk_session_id:
+                    session_manager.set_active_session_id(st.session_state.adk_session_id)
+                    success = session_manager.transition_to_phase2()
+                    if success:
+                        st.session_state.analysis_phase = "phase2_pending" 
+                        # 2단계 시작 안내 메시지 추가
+                        add_message("assistant", SYSTEM_MESSAGES["phase2_intro"], avatar="⚙️")
+                        st.session_state.need_rerun = True
+                    else:
+                        # 오류 메시지 추가
+                        add_message("assistant", "2단계 전환에 실패했습니다. 세션을 찾을 수 없습니다.", avatar="⚠️")
+                        st.session_state.need_rerun = True
+                else:
+                    # 오류 메시지 추가
+                    add_message("assistant", "유효한 세션을 찾을 수 없습니다.", avatar="⚠️")
+                    st.session_state.need_rerun = True
         with col2:
             if st.button("🏁 여기서 분석 종료하기", key="end_analysis_button"):
                 st.session_state.analysis_phase = "idle" # 초기 상태로 복귀
-                show_system_message("analysis_end")
+                # 종료 메시지 추가
+                add_message("assistant", SYSTEM_MESSAGES["analysis_end"], avatar="⚙️")
                 # 필요시 현재 세션 초기화 또는 새 세션 준비
                 st.session_state.current_idea = "" 
                 st.session_state.analyzed_idea = ""
-                # st.session_state.messages = [] # 선택: 이전 대화 초기화
-                st.rerun()
+                st.session_state.need_rerun = True
+    
+    # --- 이전 상태에 따른 조건부 처리 ---
+    # 분석 시작 상태일 때만 스피너와 함께 분석 함수 실행, 스크롤링 문제 최소화
+    if st.session_state.phase1_step == "analysis_pending" and st.session_state.analysis_phase == "phase1_pending_start":
+        with st.spinner("AI 페르소나들이 아이디어를 분석 중입니다... 잠시만 기다려주세요 ✨"):
+            # 분석 시작 준비가 된 상태에서 분석 함수 실행
+            # 이 함수 내에서 UI 업데이트를 최소화하도록 수정됨
+            run_phase1_analysis_and_update_ui(st.session_state.current_idea)
     
     # --- 채팅 입력 처리 ---
-    # 분석 중이 아닐 때만 아이디어 입력 가능하도록 (또는 새 아이디어 입력 시 상태 초기화)
-    if st.session_state.analysis_phase in ["idle", "phase1_complete", "error"]: # 분석 완료 또는 오류 시 새 아이디어 입력 가능
+    # 분석 중이 아닐 때만 아이디어 입력 가능하도록
+    if st.session_state.analysis_phase in ["idle", "phase1_complete", "error"]:
         if prompt := st.chat_input("아이디어를 입력해주세요... (분석을 원하시면 입력 후 엔터)"):
-            # 새 아이디어 입력 시 이전 메시지 초기화 여부 결정 (선택 사항)
-            # st.session_state.messages = [] 
-            
+            # 사용자 입력을 세션 상태에만 추가 (UI에 직접 표시하지 않음)
+            add_message("user", prompt)
+                
+            # 세션 상태 업데이트
             st.session_state.current_idea = prompt
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            st.session_state.phase1_step = "idea_submitted"
             
             # API 키 검증
             api_key = os.getenv("GOOGLE_API_KEY")
             if not api_key or api_key == "YOUR_ACTUAL_API_KEY":
-                st.session_state.messages.append({"role": "assistant", "avatar": "⚠️", "content": "오류: GOOGLE_API_KEY가 설정되지 않았습니다. .env 파일을 확인해주세요."})
+                # 오류 메시지 추가
+                add_message("assistant", "오류: GOOGLE_API_KEY가 설정되지 않았습니다. .env 파일을 확인해주세요.", avatar="⚠️")
                 st.session_state.analysis_phase = "error"
-                st.rerun()
+                st.session_state.need_rerun = True
             # 중복 분석 방지 및 1단계 분석 시작
             elif st.session_state.current_idea != st.session_state.analyzed_idea and st.session_state.analysis_phase != "phase1_running":
-                # 분석 시작 시스템 메시지 추가
-                show_system_message("analysis_start")
-                
-                # ADK 세션 ID 생성 또는 가져오기
-                # 매번 새 아이디어 분석 시 새 세션을 만들 것인가, 아니면 기존 세션을 이어갈 것인가?
-                # 여기서는 새 아이디어마다 새 세션을 만든다고 가정 (더 간단)
-                st.session_state.session_counter += 1
-                _ , new_adk_session_id = create_session() # create_session은 session_counter를 사용
-                st.session_state.adk_session_id = new_adk_session_id
-
-                st.session_state.analysis_phase = "phase1_pending_start" # 분석 시작 대기 상태
+                # 분석 시작 준비
+                st.session_state.analysis_phase = "phase1_pending_start" 
                 st.session_state.phase1_step = "analysis_pending"
-                st.rerun()
-
-    # 분석 시작 버튼 (임시) - 또는 위 chat_input 로직에 통합
-    if st.session_state.analysis_phase == "phase1_pending_start":
-        if st.session_state.current_idea: # 아이디어가 있을 때만
-            with st.spinner("AI 페르소나들이 아이디어를 분석 중입니다... 잠시만 기다려주세요 ✨"):
-                # 이미 분석 시작 메시지는 표시되었으므로 바로 분석 실행
-                asyncio.run(run_phase1_analysis_and_update_ui(st.session_state.current_idea, st.session_state.adk_session_id))
-            # run_phase1_analysis_and_update_ui 내부에서 rerun하므로 여기서는 추가 rerun 불필요할 수 있음
+                st.session_state.need_rerun = True
+    
+    # 최종 rerun 호출 (필요한 경우에만) - 스크롤 문제를 최소화하기 위한 최적화
+    if st.session_state.need_rerun:
+        st.session_state.need_rerun = False
+        st.rerun()
 
 if __name__ == "__main__":
     main()

@@ -106,20 +106,64 @@ class AIdeaLabOrchestrator:
         Returns:
             SequentialAgent: 1단계 워크플로우 에이전트
         """
-        # 이미 __init__에서 생성된 기존 워크플로우 에이전트를 활용
-        # 현재는 self.workflow_agent와 동일하지만, 
-        # 향후 페이즈별로 다른 에이전트 구성이 필요한 경우 여기서 커스터마이징 가능
-        return self.workflow_agent
+        # 각 페르소나 에이전트의 1단계용 인스턴스 생성
+        # (기존 에이전트는 self.agents에 이미 저장되어 있지만, phase1 전용 에이전트를 생성)
+        phase1_agents = []
+        
+        # 마케터 에이전트 (1단계용)
+        marketer_agent_phase1 = MarketerPersonaAgent(model_name=self.model_name)
+        marketer_agent_phase1.get_agent().output_key = "marketer_report_phase1"  # 명확한 Phase 1 접미사 추가
+        
+        # 비판적 분석가 에이전트 (1단계용)
+        critic_agent_phase1 = CriticPersonaAgent(model_name=self.model_name)
+        critic_agent_phase1.get_agent().output_key = "critic_report_phase1"  # 명확한 Phase 1 접미사 추가
+        
+        # 현실적 엔지니어 에이전트 (1단계용)
+        engineer_agent_phase1 = EngineerPersonaAgent(model_name=self.model_name)
+        engineer_agent_phase1.get_agent().output_key = "engineer_report_phase1"  # 명확한 Phase 1 접미사 추가
+        
+        # 페르소나 순서에 따라 에이전트 추가
+        for persona_type in PERSONA_SEQUENCE:
+            if persona_type == PersonaType.MARKETER:
+                phase1_agents.append(marketer_agent_phase1.get_agent())
+            elif persona_type == PersonaType.CRITIC:
+                phase1_agents.append(critic_agent_phase1.get_agent())
+            elif persona_type == PersonaType.ENGINEER:
+                phase1_agents.append(engineer_agent_phase1.get_agent())
+        
+        # 최종 요약 에이전트 (1단계용)
+        summary_agent_phase1 = Agent(
+            name="summary_agent_phase1",
+            model=self.model_name,
+            description="1단계 아이디어 분석 요약 에이전트",
+            instruction=FINAL_SUMMARY_PROMPT,
+            output_key="summary_report_phase1"  # 명확한 Phase 1 접미사 추가
+        )
+        
+        # 1단계 전용 워크플로우 에이전트 생성
+        phase1_workflow_agent = SequentialAgent(
+            name="aidea_lab_phase1_workflow",
+            description="AIdea Lab 1단계 워크숍 시퀀스",
+            sub_agents=[*phase1_agents, summary_agent_phase1]
+        )
+        
+        return phase1_workflow_agent
     
     def get_summary_agent(self):
         """요약 에이전트 반환"""
         return self.summary_agent
     
-    def get_output_keys(self):
-        """모든 페르소나 에이전트의 출력 키 목록 반환"""
+    def get_output_keys_phase1(self):
+        """
+        1단계 분석에 사용되는 모든 페르소나 에이전트의 출력 키 목록을 반환합니다.
+        이 키들은 session.state에서 각 페르소나 보고서를 가져오는 데 사용됩니다.
+        
+        Returns:
+            Dict[str, str]: 페르소나 이름과 해당 출력 키 매핑 딕셔너리
+        """
         return {
-            "marketer": self.marketer_agent.get_output_key(),
-            "critic": self.critic_agent.get_output_key(),
-            "engineer": self.engineer_agent.get_output_key(),
-            "summary": self.config["summary_output_key"]
+            "marketer": "marketer_report_phase1",
+            "critic": "critic_report_phase1",
+            "engineer": "engineer_report_phase1",
+            "summary_phase1": "summary_report_phase1"
         } 

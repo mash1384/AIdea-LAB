@@ -96,6 +96,21 @@ class AIdeaLabOrchestrator:
         """워크플로우 에이전트(SequentialAgent) 반환"""
         return self.workflow_agent
     
+    def get_phase1_workflow(self):
+        """
+        1단계 분석용 워크플로우 에이전트를 반환합니다.
+        
+        1단계에서는 세 가지 페르소나 에이전트가 순차적으로 실행되고,
+        마지막으로 최종 요약 에이전트가 실행됩니다.
+        
+        Returns:
+            SequentialAgent: 1단계 워크플로우 에이전트
+        """
+        # 이미 __init__에서 생성된 기존 워크플로우 에이전트를 활용
+        # 현재는 self.workflow_agent와 동일하지만, 
+        # 향후 페이즈별로 다른 에이전트 구성이 필요한 경우 여기서 커스터마이징 가능
+        return self.workflow_agent
+    
     def get_summary_agent(self):
         """요약 에이전트 반환"""
         return self.summary_agent

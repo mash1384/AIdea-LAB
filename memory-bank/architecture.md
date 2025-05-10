@@ -85,12 +85,22 @@ Streamlit을 사용한 웹 기반 사용자 인터페이스를 구현한 파일�
 - **아키텍처**:
     - 사용자가 아이디어를 입력하고 분석을 요청하는 웹 애플리케이션의 진입점입니다.
     - `AIdeaLabOrchestrator`를 호출하여 아이디어 분석 프로세스를 시작합니다.
-    - 각 페르소나(마케터, 비평가, 엔지니어)의 분석 결과와 최종 요약을 탭 형태로 사용자에게 보여줍니다.
-    - 세션 관리를 통해 사용자별 분석 흐름을 유지합니다.
+    - 챗봇 인터페이스로 구현되어 사용자와 AI 페르소나 간의 자연스러운 대화 흐름을 제공합니다.
+    - 주요 구성 요소:
+        - **챗봇 UI 레이아웃**: `st.set_page_config(layout="centered")`를 사용한 중앙 정렬 레이아웃
+        - **채팅 메시지 표시**: `st.chat_message()`와 `st.container()`를 사용하여 사용자와 AI 응답을 대화 형태로 표시
+        - **채팅 입력**: `st.chat_input()`을 사용하여 사용자 아이디어 입력 수집
+        - **세션 상태 관리**: `initialize_session_state()` 함수를 통한 체계적인 상태 관리
+            - `messages`: 전체 대화 히스토리 저장 리스트
+            - `initial_idea`: 사용자가 입력한 아이디어
+            - `analysis_phase`: 현재 분석 단계 추적 (idle, phase1_running, phase1_complete 등)
+        - **분석 흐름 관리**: `run_phase1_analysis_and_update_ui()` 비동기 함수를 통한 분석 실행 및 UI 업데이트 통합
+    - 각 페르소나의 분석 결과를 순차적으로 챗봇 UI에 스트리밍하여 표시합니다.
+    - 1단계 분석 완료 후 2단계 진행 선택을 위한 버튼 UI를 제공합니다.
     - `asyncio`를 사용하여 백엔드 로직(에이전트 실행)을 비동기적으로 처리하여 UI 반응성을 유지합니다.
     - **모델 선택 기능**:
         - "고급 설정" expander 내에 모델 선택 드롭다운 UI 제공
-        - 선택된 모델의 정보 표시 및 변경 적용 버튼 제공
+        - 선택된 모델의 정보 표시 및 변경 적용 기능
         - `update_selected_model()` 함수를 통해 `personas.SELECTED_MODEL` 전역 변수 업데이트
         - 아이디어 분석 요청 시 선택된 모델 자동 적용
 
@@ -259,193 +269,104 @@ Phase 1에서는 단일 페르소나 에이전트만 구현했지만, 다중 페
 
 ## 파일별 역할 및 아키텍처 설명
 
-### 1. `src/ui/app.py`
-- **역할**: Streamlit 기반의 사용자 인터페이스 (UI)를 제공합니다.
-- **아키텍처**:
-    - 사용자가 아이디어를 입력하고 분석을 요청하는 웹 애플리케이션의 진입점입니다.
-    - `AIdeaLabOrchestrator`를 호출하여 아이디어 분석 프로세스를 시작합니다.
-    - 각 페르소나(마케터, 비평가, 엔지니어)의 분석 결과와 최종 요약을 탭 형태로 사용자에게 보여줍니다.
-    - 세션 관리를 통해 사용자별 분석 흐름을 유지합니다.
-    - `asyncio`를 사용하여 백엔드 로직(에이전트 실행)을 비동기적으로 처리하여 UI 반응성을 유지합니다.
-    - **모델 선택 기능**:
-        - "고급 설정" expander 내에 모델 선택 드롭다운 UI 제공
-        - 선택된 모델의 정보 표시 및 변경 적용 버튼 제공
-        - `update_selected_model()` 함수를 통해 `personas.SELECTED_MODEL` 전역 변수 업데이트
-        - 아이디어 분석 요청 시 선택된 모델 자동 적용
+### 핵심 구성 요소
 
-### 2. `src/orchestrator/main_orchestrator.py`
-- **역할**: 아이디어 분석 워크플로우를 총괄하는 오케스트레이터입니다.
-- **아키텍처**:
-    - `MarketerPersonaAgent`, `CriticPersonaAgent`, `EngineerPersonaAgent` 인스턴스를 생성하고 관리합니다.
-    - 페르소나 순서(`PERSONA_SEQUENCE`)에 따라 에이전트를 순차적으로 실행합니다.
-    - 모든 페르소나 에이전트 실행이 완료된 후, 최종 요약을 생성합니다.
-    - **모델 업데이트 반영**: 모든 에이전트 생성 시 `SELECTED_MODEL`을 참조하여 최신 선택된 모델을 적용합니다.
+#### 에이전트 모듈 (`src/agents/`)
 
-### 3. `src/agents/`
-- 이 디렉토리에는 다양한 AI 페르소나 에이전트들이 포함됩니다. 각 에이전트는 Google ADK의 `Agent` 클래스를 기반으로 구현됩니다.
+* **`critic_agent.py`**: 
+  * 비판적 분석가 페르소나 에이전트 구현
+  * `CriticPersonaAgent` 클래스를 통해 구현, 아이디어의 잠재적 문제점과 리스크를 분석
+  * `CRITIC_PROMPT`를 시스템 프롬프트로 사용하여 Google ADK `Agent` 객체 생성
+  * `get_agent()` 및 `get_output_key()` 메서드 제공하여 에이전트 객체와 결과 저장 키 접근 지원
 
-    #### 3.1. `src/agents/marketer_agent.py` (MarketerPersonaAgent)
-    - **역할**: 마케팅 전문가 페르소나를 담당합니다.
-    - **아키텍처**:
-        - 입력된 아이디어에 대해 시장 잠재력, 타겟 고객, 독창성, 비즈니스 모델 관점에서 분석하고 평가합니다.
-        - `MARKETER_PROMPT` (from `config/prompts.py`)와 `PERSONA_CONFIGS[PersonaType.MARKETER]` (from `config/personas.py`) 설정을 사용하여 ADK 에이전트를 초기화합니다.
+* **`marketer_agent.py`**: 
+  * 창의적 마케터 페르소나 에이전트 구현
+  * `MarketerPersonaAgent` 클래스 통해 구현, 아이디어의 창의적 가치와 시장 잠재력 분석
+  * `MARKETER_PROMPT`를 시스템 프롬프트로 사용
+  * 다른 에이전트들과 동일한 인터페이스 제공으로 일관된 접근 방식 유지
 
-    #### 3.2. `src/agents/critic_agent.py` (CriticPersonaAgent)
-    - **역할**: 비평가 페르소나를 담당합니다.
-    - **아키텍처**:
-        - 입력된 아이디어의 잠재적인 문제점, 약점, 리스크, 개선점 등을 비판적인 시각에서 분석합니다.
-        - `CRITIC_PROMPT`와 `PERSONA_CONFIGS[PersonaType.CRITIC]` 설정을 사용합니다.
+* **`engineer_agent.py`**: 
+  * 현실적 엔지니어 페르소나 에이전트 구현
+  * `EngineerPersonaAgent` 클래스 통해 구현, 아이디어의 기술적 실현 가능성 평가
+  * `ENGINEER_PROMPT`를 시스템 프롬프트로 사용
+  * 모델 이름을 파라미터로 받아 다양한 LLM 모델 지원
 
-    #### 3.3. `src/agents/engineer_agent.py` (EngineerPersonaAgent)
-    - **역할**: 엔지니어 페르소나를 담당합니다.
-    - **아키텍처**:
-        - 입력된 아이디어의 기술적 실현 가능성, 필요한 기술 스택, 개발 난이도, 잠재적 기술적 장벽 등을 평가합니다.
-        - `ENGINEER_PROMPT`와 `PERSONA_CONFIGS[PersonaType.ENGINEER]` 설정을 사용합니다.
+#### 오케스트레이터 모듈 (`src/orchestrator/`)
 
-### 4. `config/`
-- 애플리케이션의 주요 설정 값들을 관리하는 디렉토리입니다.
+* **`main_orchestrator.py`**: 
+  * 다양한 페르소나 에이전트의 실행 조율 담당
+  * `AIdeaLabOrchestrator` 클래스가 핵심 로직 제공
+  * 페르소나 에이전트 생성 및 관리
+  * Google ADK `SequentialAgent`를 사용한 워크플로우 에이전트 구성
+  * `get_workflow_agent()`, `get_phase1_workflow()` 등 워크플로우 에이전트 접근 메서드 제공
+  * `get_output_keys()` 메서드를 통해 모든 에이전트의 결과 저장 키 목록 제공
 
-    #### 4.1. `config/personas.py`
-    - **역할**: 각 AI 페르소나(마케터, 비평가, 엔지니어) 및 오케스트레이터의 기본 설정을 정의합니다.
-    - **아키텍처**:
-        - `PersonaType` Enum을 통해 페르소나 유형을 정의합니다.
-        - `PERSONA_CONFIGS` 딕셔너리는 각 페르소나의 이름, 역할 설명, 아이콘, LLM 모델의 `temperature`, `max_output_tokens` 등의 파라미터를 포함합니다.
-        - `PERSONA_SEQUENCE` 리스트는 오케스트레이터가 페르소나들을 실행하는 순서를 정의합니다.
-        - `ORCHESTRATOR_CONFIG`는 최종 요약 에이전트의 설정을 포함합니다.
+#### UI 모듈 (`src/ui/`)
 
-    #### 4.2. `config/prompts.py`
-    - **역할**: 각 AI 에이전트(페르소나 및 오케스트레이터/요약 에이전트)가 사용할 시스템 프롬프트를 정의합니다.
-    - **아키텍처**:
-        - `MARKETER_PROMPT`, `CRITIC_PROMPT`, `ENGINEER_PROMPT`는 각 페르소나 에이전트의 역할과 분석 방향을 지시하는 상세한 지침을 담고 있습니다.
-        - `FINAL_SUMMARY_PROMPT`는 모든 페르소나의 분석 결과를 종합하여 최종 보고서를 작성하도록 요약 에이전트에게 지시합니다.
-        - `ORCHESTRATOR_PROMPT`는 현재 직접적으로 사용되지는 않지만, 향후 오케스트레이터 자체를 LLM 에이전트로 발전시킬 경우 활용될 수 있습니다. (현재는 커스텀 로직으로 페르소나들을 순차 실행)
+* **`app.py`**: 
+  * Streamlit 기반 사용자 인터페이스 제공
+  * 챗봇 형태의 대화형 UI 구현
+  * 아이디어 입력 및 분석 요청 처리
+  * 세션 상태 관리 및 AI 페르소나 응답 표시
+  * 시스템 안내 메시지 관리를 위한 `SYSTEM_MESSAGES` 정의 및 `show_system_message()` 함수 구현
+  * 사용자 추가 정보(핵심 목표, 제약 조건, 중요 가치) 입력 및 관리
+  * 비동기 분석 실행 및 스트리밍 응답 처리
 
-### 5. `setup.py`
-- **역할**: Python 패키지 설정 파일입니다.
-- **아키텍처**:
-    - `setuptools`를 사용하여 프로젝트를 패키지화합니다.
-    - `find_packages()`를 통해 `src` 디렉토리 하위의 모듈들을 패키지에 포함시킵니다.
-    - 이 파일을 프로젝트 루트에 추가하고 `pip install -e .` 명령으로 개발 모드로 설치하면, `src.orchestrator`와 같은 절대 경로 임포트가 `PYTHONPATH` 설정 없이도 정상적으로 동작하도록 돕습니다. 이는 `ModuleNotFoundError: No module named 'src'` 오류를 해결하는 한 가지 방법입니다.
+#### 설정 모듈 (`config/`)
 
-### 6. `.env`
-- **역할**: 환경 변수를 저장하는 파일입니다.
-- **아키텍처**:
-    - `GOOGLE_API_KEY`와 같은 민감한 정보나 환경별 설정값을 저장합니다.
-    - `python-dotenv` 라이브러리를 통해 애플리케이션 실행 시 이 파일의 변수들을 환경 변수로 로드합니다.
-    - `.gitignore`에 추가되어 버전 관리 시스템에 포함되지 않도록 하는 것이 일반적입니다.
+* **`prompts.py`**: 
+  * 각 페르소나별 시스템 프롬프트 정의
+  * 비판적 분석가(`CRITIC_PROMPT`), 창의적 마케터(`MARKETER_PROMPT`), 현실적 엔지니어(`ENGINEER_PROMPT`)의 지침 설정
+  * 오케스트레이터 및 요약 생성을 위한 프롬프트(`ORCHESTRATOR_PROMPT`, `FINAL_SUMMARY_PROMPT`) 제공
 
-### 참고: Google ADK (Agent Development Kit)
-- 이 프로젝트는 Google의 ADK를 핵심 프레임워크로 사용합니다.
-- **`google.adk.agents.Agent`**: LLM 기반 에이전트를 생성하기 위한 기본 클래스입니다. 각 페르소나 및 요약 에이전트가 이를 상속받거나 활용합니다.
-- **`google.adk.runners.Runner`**: 에이전트를 실행하고 세션 관리 및 이벤트 처리를 담당합니다.
-- **`google.adk.sessions.InMemorySessionService`**: 세션 데이터를 메모리에 저장하고 관리하는 서비스입니다. 사용자별 대화 상태나 에이전트 실행 결과를 저장하는 데 사용됩니다.
-- **`google.genai.types`**: Gemini API와 상호작용하기 위한 데이터 타입 (예: `Content`, `Part`)을 제공합니다.
+* **`personas.py`**: 
+  * 페르소나 유형(`PersonaType`) 및 설정(`PERSONA_CONFIGS`) 정의
+  * 페르소나별 매개변수(temperature, 토큰 제한 등) 구성
+  * 워크숍 진행 순서 정의(`PERSONA_SEQUENCE`)
+  * 오케스트레이터 설정(`ORCHESTRATOR_CONFIG`) 제공
 
-## 모델 선택 처리 방식 개선 후 아키텍처 변화
+* **`models.py`**: 
+  * 사용 가능한 제미니 모델 정의
+  * `ModelType` 열거형으로 지원 모델 정의
+  * 각 모델에 대한 설명 및 표시 이름 제공
+  * UI에서 모델 선택 옵션을 위한 `get_model_display_options()` 함수 제공
 
-## 오케스트레이터 실행 로직 개선 후 아키텍처 변화
+### 데이터 흐름
 
-Phase 5에서는 ADK의 워크플로우 메커니즘을 활용하여 오케스트레이션 로직을 개선했습니다. 이는 페르소나 에이전트들 간의 상태 공유와 순차적 실행을 더 효율적이고 안정적으로 만드는 중요한 변화입니다.
+1. **사용자 입력 처리**: 
+   * `app.py`에서 사용자의 아이디어와 추가 정보(목표, 제약 조건, 가치) 입력 받음
+   * Streamlit 세션 상태(`st.session_state`)에 저장
 
-### SequentialAgent 기반 아키텍처
+2. **ADK 세션 관리**:
+   * `InMemorySessionService`를 통한 ADK 세션 생성
+   * 사용자 입력을 ADK `session.state`에 저장
+   * 여러 페르소나 에이전트 간 정보 공유에 활용
 
-Google ADK는 워크플로우 에이전트를 통해 여러 에이전트를 구성하고 실행하는 메커니즘을 제공합니다. AIdea Lab은 이제 `SequentialAgent`를 사용하여 모든 페르소나 에이전트와 최종 요약 에이전트를 하나의 통합된 워크플로우로 관리합니다.
+3. **워크플로우 실행**:
+   * `AIdeaLabOrchestrator`가 `SequentialAgent` 기반 워크플로우 구성
+   * 모든 페르소나 에이전트를 순차적으로 실행
+   * 각 에이전트의 결과를 ADK `session.state`에 저장
+   * 최종적으로 요약 에이전트가 전체 결과 종합
 
-```mermaid
-graph TD
-    Runner[Runner] -->|실행 요청| SequentialAgent
-    
-    subgraph "SequentialAgent (workflow_agent)"
-        MarketerAgent[MarketerPersonaAgent] --> CriticAgent[CriticPersonaAgent]
-        CriticAgent --> EngineerAgent[EngineerPersonaAgent]
-        EngineerAgent --> SummaryAgent[SummaryAgent]
-    end
-    
-    SequentialAgent -->|상태 공유| SessionState[(session.state)]
-    Runner -->|결과 반환| UI[UI Layer]
-```
+4. **UI 업데이트**:
+   * ADK 이벤트 스트림을 통한 응답 처리
+   * 각 페르소나의 결과를 순차적으로 UI에 스트리밍 표시
+   * 시스템 안내 메시지를 통한 분석 흐름 안내
 
-### 이전 아키텍처와의 주요 차이점
+### 주요 상호작용
 
-1. **에이전트 실행 방식**:
-   - 이전: 각 페르소나 에이전트마다 개별 Runner 인스턴스를 생성하고 순차적으로 실행
-   - 현재: 단일 `SequentialAgent`에 모든 페르소나를 sub_agents로 등록하고 단일 Runner로 실행
+1. **에이전트-오케스트레이터 상호작용**:
+   * 오케스트레이터가 페르소나 에이전트 객체 생성 및 관리
+   * `SequentialAgent`를 통한 순차적 실행 조율
+   * `session.state`를 통한 정보 공유
 
-2. **상태 관리**:
-   - 이전: 각 페르소나의 Runner가 독립적으로 세션 상태에 액세스하고 수정
-   - 현재: ADK 프레임워크가 자동으로 sub_agents 간의 세션 상태 공유를 관리
+2. **오케스트레이터-UI 상호작용**:
+   * UI가 오케스트레이터 메서드 호출하여 워크플로우 에이전트 획득
+   * `Runner`를 통한 워크플로우 실행
+   * 이벤트 스트림 기반 비동기 결과 처리
 
-3. **요약 생성 프로세스**:
-   - 이전: 모든 페르소나 실행 후 별도 단계로 요약 에이전트 실행
-   - 현재: 요약 에이전트가 워크플로우의 마지막 단계로 통합되어 자연스러운 흐름 형성
+3. **설정-에이전트 상호작용**:
+   * 에이전트 클래스가 설정 모듈에서 프롬프트 및 페르소나 설정 참조
+   * 모델 설정을 통한 LLM 선택 적용
 
-4. **코드 구조**:
-   - 이전: `run_all_personas_sequentially()` 메서드에 복잡한 순차 실행 로직이 포함
-   - 현재: ADK 워크플로우 메커니즘에 의존하여 코드 간소화 및 표준화
-
-### 데이터 흐름 (워크플로우 실행)
-
-```mermaid
-sequenceDiagram
-    participant User as 사용자
-    participant UI as app.py (UI)
-    participant Orchestrator as AIdeaLabOrchestrator
-    participant WorkflowAgent as SequentialAgent
-    participant State as session.state
-    
-    User->>UI: 아이디어 입력
-    UI->>Orchestrator: 오케스트레이터 생성
-    UI->>Orchestrator: get_workflow_agent() 호출
-    Orchestrator->>UI: SequentialAgent 반환
-    UI->>WorkflowAgent: 실행 (via Runner)
-    
-    Note over WorkflowAgent: 마케터 에이전트 실행
-    WorkflowAgent->>State: 마케터 결과 저장
-    
-    Note over WorkflowAgent: 비평가 에이전트 실행
-    WorkflowAgent->>State: 비평가 결과 저장
-    
-    Note over WorkflowAgent: 엔지니어 에이전트 실행
-    WorkflowAgent->>State: 엔지니어 결과 저장
-    
-    Note over WorkflowAgent: 요약 에이전트 실행
-    WorkflowAgent->>State: 요약 결과 저장
-    
-    UI->>State: 모든 결과 조회
-    UI->>User: 결과 표시 (탭 형태)
-```
-
-### 각 파일의 역할 업데이트
-
-#### 1. src/orchestrator/main_orchestrator.py
-
-- **역할**: 페르소나 에이전트들을 순차적 워크플로우로 구성하고 관리
-- **주요 변화**:
-  - `SequentialAgent` 사용: 모든 페르소나 에이전트와 요약 에이전트를 단일 워크플로우로 통합
-  - `run_all_personas_sequentially()` 메서드 제거: ADK의 워크플로우 메커니즘으로 대체
-  - 불필요한 `orchestrator_agent` 제거: 사용되지 않던 에이전트 객체 제거
-  - `get_workflow_agent()` 메서드 추가: 구성된 `SequentialAgent` 인스턴스를 반환
-
-#### 2. src/ui/app.py
-
-- **역할**: 사용자 인터페이스 제공 및 워크플로우 실행 조율
-- **주요 변화**:
-  - `analyze_idea()` 함수 단순화: 단일 Runner를 사용하여 전체 워크플로우 실행
-  - 별도의 요약 생성 로직 제거: 요약 생성이 워크플로우의 일부로 통합
-  - 더 효율적인 세션 상태 관리: 일관된 세션 사용으로 상태 공유 안정화
-
-#### 3. tests/test_app.py
-
-- **역할**: 애플리케이션 기능과 워크플로우 실행을 테스트
-- **주요 변화**:
-  - `mock_orchestrator` 픽스처 업데이트: `get_workflow_agent()`와 SequentialAgent 모킹
-  - 테스트 검증 로직 변경: 워크플로우 실행 방식에 맞춘 검증
-
-### 개선된 아키텍처의 장점
-
-1. **표준 패턴 활용**: Google ADK의 권장 설계 패턴을 채택하여 프레임워크 장점 극대화
-2. **상태 일관성**: 페르소나 에이전트 간 `session.state` 공유가 ADK에 의해 자동 관리되어 안정성 향상
-3. **코드 간소화**: 불필요한 반복 코드와 복잡한 실행 로직 제거
-4. **확장성**: 새로운 페르소나나 처리 단계 추가가 단순화됨
-5. **리소스 효율성**: 여러 Runner 인스턴스 대신 단일 Runner 사용으로 메모리 사용 최적화
-6. **디버깅 용이성**: 워크플로우 기반 실행으로 중간 상태 관찰과 문제 추적이 더 용이
+이러한 아키텍처는 모듈화, 확장성, 재사용성을 중심으로 설계되어 있으며, Google ADK의 에이전트 및 세션 관리 기능을 효과적으로 활용하고 있습니다. 사용자 경험 측면에서는 Streamlit의 채팅 인터페이스와 비동기 처리를 통해 자연스러운 대화형 분석 경험을 제공합니다.

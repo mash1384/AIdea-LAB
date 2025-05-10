@@ -92,16 +92,22 @@ Streamlit을 사용한 웹 기반 사용자 인터페이스를 구현한 파일�
         - **채팅 입력**: `st.chat_input()`을 사용하여 사용자 아이디어 입력 수집
         - **세션 상태 관리**: `initialize_session_state()` 함수를 통한 체계적인 상태 관리
             - `messages`: 전체 대화 히스토리 저장 리스트
-            - `initial_idea`: 사용자가 입력한 아이디어
+            - `current_idea`: 사용자가 입력한 아이디어
             - `analysis_phase`: 현재 분석 단계 추적 (idle, phase1_running, phase1_complete 등)
+            - `phase1_step`: 1단계 분석의 세부 진행 상태 관리 ("awaiting_idea", "idea_submitted", "analysis_started", "marketer_analyzing" 등)
+            - `user_goal`, `user_constraints`, `user_values`: 사용자 추가 정보 저장
+        - **시스템 메시지 관리**: `SYSTEM_MESSAGES` 딕셔너리와 `show_system_message()` 함수를 통한 일관된 안내 메시지 표시
+            - 환영 메시지, 분석 시작 안내, 각 페르소나 소개, 단계 완료 안내 등 다양한 메시지 정의
+            - `rerun` 파라미터를 통한 UI 업데이트 제어
         - **분석 흐름 관리**: `run_phase1_analysis_and_update_ui()` 비동기 함수를 통한 분석 실행 및 UI 업데이트 통합
+            - 상태 기반 메시지 표시 흐름: 아이디어 입력 → 분석 시작 안내 → 페르소나 소개 → 결과 표시 → 완료 안내
+            - 페르소나 분석 간 적절한 지연 및 UI 업데이트로 자연스러운 대화 흐름 제공
     - 각 페르소나의 분석 결과를 순차적으로 챗봇 UI에 스트리밍하여 표시합니다.
     - 1단계 분석 완료 후 2단계 진행 선택을 위한 버튼 UI를 제공합니다.
     - `asyncio`를 사용하여 백엔드 로직(에이전트 실행)을 비동기적으로 처리하여 UI 반응성을 유지합니다.
     - **모델 선택 기능**:
         - "고급 설정" expander 내에 모델 선택 드롭다운 UI 제공
         - 선택된 모델의 정보 표시 및 변경 적용 기능
-        - `update_selected_model()` 함수를 통해 `personas.SELECTED_MODEL` 전역 변수 업데이트
         - 아이디어 분석 요청 시 선택된 모델 자동 적용
 
 ### 5. src/poc/simple_adk_agent.py

@@ -118,6 +118,14 @@ Streamlit을 사용한 웹 기반 사용자 인터페이스를 구현한 파일�
         - "고급 설정" expander 내에 모델 선택 드롭다운 UI 제공
         - 선택된 모델의 정보 표시 및 변경 적용 기능
         - 아이디어 분석 요청 시 선택된 모델 자동 적용
+    - **실시간 스트리밍 기능**:
+        - `stream_text()` 함수: 텍스트를 단어 단위로 스트리밍하는 제너레이터 함수
+        - `st.write_stream()`과 결합하여 자연스러운 타이핑 효과 제공
+        - `asyncio.sleep()`을 통한 페르소나 응답 간 전환 지연으로 사용자 경험 개선
+        - 비동기 이벤트 처리를 통한 실시간 UI 업데이트
+        - `processed_agents` 집합을 사용한 이벤트 중복 처리 방지
+        - 각 페르소나 타입별 맞춤 처리 로직 (`marketer`, `critic`, `engineer`, `summary` 각각에 대한 조건부 처리)
+        - `placeholder = st.empty()`와 `with placeholder.container()`를 활용한 효율적인 UI 업데이트
 
 ### 5. src/poc/simple_adk_agent.py
 

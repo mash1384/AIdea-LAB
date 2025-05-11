@@ -7,6 +7,7 @@
 
 import os
 from google.adk.agents import Agent
+from google.genai import types  # types 모듈 임포트 추가
 from config.prompts import CRITIC_PROMPT
 from config.personas import PersonaType, PERSONA_CONFIGS
 from config.models import DEFAULT_MODEL
@@ -29,6 +30,11 @@ class CriticPersonaAgent:
         # 페르소나 설정 가져오기
         persona_config = PERSONA_CONFIGS[PersonaType.CRITIC]
         
+        # GenerationConfig 객체 명시적 생성
+        generate_config = types.GenerationConfig(
+            temperature=persona_config["temperature"],
+            max_output_tokens=persona_config["max_output_tokens"]
+        )
 
         # 에이전트 생성
         self.agent = Agent(
@@ -36,8 +42,8 @@ class CriticPersonaAgent:
             model=model_name,  # 파라미터로 전달받은 모델 사용
             description=persona_config["description"],
             instruction=CRITIC_PROMPT,  # 비판적 분석가 시스템 프롬프트
-            output_key=persona_config["output_key"]  # session.state에 저장될 키
-            # generate_content_config=generate_config  # 생성 설정
+            output_key=persona_config["output_key"],  # session.state에 저장될 키
+            generate_content_config=generate_config  # 생성 설정 명시적으로 전달
         )
     
     def get_agent(self):

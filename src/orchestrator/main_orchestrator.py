@@ -10,6 +10,7 @@ import sys
 from typing import Dict, Any
 from google.adk.agents import Agent, SequentialAgent
 from google.adk.runners import Runner
+from google.genai import types  # types 모듈 임포트 추가
 
 from config.prompts import FINAL_SUMMARY_PROMPT
 from config.personas import PersonaType, PERSONA_CONFIGS, PERSONA_SEQUENCE, ORCHESTRATOR_CONFIG
@@ -52,37 +53,19 @@ class AIdeaLabOrchestrator:
             elif persona_type == PersonaType.ENGINEER:
                 self.agents.append(self.engineer_agent.get_agent())
         
-        # 최종 요약 생성을 위한 에이전트
-        # generate_config = {
-        #     "temperature": self.config["temperature"],
-        #     "max_output_tokens": self.config["max_output_tokens"],
-        #     "safety_settings": [
-        #         {
-        #             'category': 'HARM_CATEGORY_HARASSMENT',
-        #             'threshold': 'BLOCK_NONE'
-        #         },
-        #         {
-        #             'category': 'HARM_CATEGORY_HATE_SPEECH',
-        #             'threshold': 'BLOCK_NONE'
-        #         },
-        #         {
-        #             'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
-        #             'threshold': 'BLOCK_NONE'
-        #         },
-        #         {
-        #             'category': 'HARM_CATEGORY_DANGEROUS_CONTENT',
-        #             'threshold': 'BLOCK_NONE'
-        #         }
-        #     ]
-        # }
+        # 최종 요약 생성을 위한 에이전트의 GenerationConfig 설정
+        generate_config = types.GenerationConfig(
+            temperature=self.config["temperature"],
+            max_output_tokens=self.config["max_output_tokens"]
+        )
         
         self.summary_agent = Agent(
             name="summary_agent",
             model=self.model_name,
             description="최종 요약 생성 에이전트",
             instruction=FINAL_SUMMARY_PROMPT,
-            output_key=self.config["summary_output_key"]
-            # generate_content_config=generate_config
+            output_key=self.config["summary_output_key"],
+            generate_content_config=generate_config  # 생성 설정 명시적으로 전달
         )
         
         # SequentialAgent 생성하여 모든 페르소나 에이전트와 요약 에이전트를 포함
@@ -112,33 +95,57 @@ class AIdeaLabOrchestrator:
         
         # 마케터 에이전트 (1단계용)
         marketer_agent_phase1 = MarketerPersonaAgent(model_name=self.model_name)
-        marketer_agent_phase1.get_agent().output_key = "marketer_report_phase1"  # 명확한 Phase 1 접미사 추가
+        # 직접 에이전트 객체를 가져와서 output_key 설정
+        marketer_agent = marketer_agent_phase1.get_agent()
+        marketer_agent.output_key = "marketer_report_phase1"  # 명확한 Phase 1 접미사 추가
         
         # 비판적 분석가 에이전트 (1단계용)
         critic_agent_phase1 = CriticPersonaAgent(model_name=self.model_name)
-        critic_agent_phase1.get_agent().output_key = "critic_report_phase1"  # 명확한 Phase 1 접미사 추가
+        # 직접 에이전트 객체를 가져와서 output_key 설정
+        critic_agent = critic_agent_phase1.get_agent()
+        critic_agent.output_key = "critic_report_phase1"  # 명확한 Phase 1 접미사 추가
         
         # 현실적 엔지니어 에이전트 (1단계용)
         engineer_agent_phase1 = EngineerPersonaAgent(model_name=self.model_name)
-        engineer_agent_phase1.get_agent().output_key = "engineer_report_phase1"  # 명확한 Phase 1 접미사 추가
+        # 직접 에이전트 객체를 가져와서 output_key 설정
+        engineer_agent = engineer_agent_phase1.get_agent()
+        engineer_agent.output_key = "engineer_report_phase1"  # 명확한 Phase 1 접미사 추가
         
         # 페르소나 순서에 따라 에이전트 추가
         for persona_type in PERSONA_SEQUENCE:
             if persona_type == PersonaType.MARKETER:
-                phase1_agents.append(marketer_agent_phase1.get_agent())
+                phase1_agents.append(marketer_agent)
             elif persona_type == PersonaType.CRITIC:
-                phase1_agents.append(critic_agent_phase1.get_agent())
+                phase1_agents.append(critic_agent)
             elif persona_type == PersonaType.ENGINEER:
-                phase1_agents.append(engineer_agent_phase1.get_agent())
+                phase1_agents.append(engineer_agent)
         
         # 최종 요약 에이전트 (1단계용)
+        # 각 페르소나 에이전트의 output_key를 명시적으로 참조하는 수정된 프롬프트
+        summary_prompt = FINAL_SUMMARY_PROMPT.replace("{state.marketer_response}", "{state.marketer_report_phase1}")
+        summary_prompt = summary_prompt.replace("{state.critic_response}", "{state.critic_report_phase1}")
+        summary_prompt = summary_prompt.replace("{state.engineer_response}", "{state.engineer_report_phase1}")
+        
+        # 요약 에이전트의 GenerationConfig 생성
+        summary_generate_config = types.GenerationConfig(
+            temperature=self.config["temperature"],
+            max_output_tokens=self.config["max_output_tokens"]
+        )
+        
         summary_agent_phase1 = Agent(
             name="summary_agent_phase1",
             model=self.model_name,
             description="1단계 아이디어 분석 요약 에이전트",
-            instruction=FINAL_SUMMARY_PROMPT,
-            output_key="summary_report_phase1"  # 명확한 Phase 1 접미사 추가
+            instruction=summary_prompt,
+            output_key="summary_report_phase1",  # 명확한 Phase 1 접미사 추가
+            generate_content_config=summary_generate_config  # 생성 설정 명시적으로 전달
         )
+        
+        # 디버깅 로그 출력
+        print(f"Created phase1 agents - Marketer output_key: {marketer_agent.output_key}")
+        print(f"Created phase1 agents - Critic output_key: {critic_agent.output_key}")
+        print(f"Created phase1 agents - Engineer output_key: {engineer_agent.output_key}")
+        print(f"Created phase1 agents - Summary output_key: {summary_agent_phase1.output_key}")
         
         # 1단계 전용 워크플로우 에이전트 생성
         phase1_workflow_agent = SequentialAgent(

@@ -173,4 +173,139 @@ class AIdeaLabOrchestrator:
             "critic": "critic_report_phase1",
             "engineer": "engineer_report_phase1",
             "summary_phase1": "summary_report_phase1"
-        } 
+        }
+    
+    def get_phase2_discussion_facilitator(self):
+        """
+        2단계 토론 촉진자 에이전트를 반환합니다.
+        
+        2단계 토론 촉진자는 페르소나들 간의 토론을 유도하고,
+        다음에 어떤 페르소나가 발언할지, 어떤 주제에 대해 토론할지를 결정합니다.
+        
+        Returns:
+            Agent: 토론 촉진자 에이전트
+        """
+        from src.agents.facilitator_agent import DiscussionFacilitatorAgent
+        from config.prompts import FACILITATOR_PHASE2_PROMPT_PROVIDER
+        
+        # 2단계 토론 촉진자 에이전트 생성
+        facilitator_agent = DiscussionFacilitatorAgent(
+            model_name=self.model_name,
+            instruction_provider=FACILITATOR_PHASE2_PROMPT_PROVIDER
+        )
+        
+        # 디버깅 로그 출력
+        print(f"Created phase2 facilitator agent with output_key: {facilitator_agent.get_output_key()}")
+        
+        return facilitator_agent.get_agent()
+    
+    def get_phase2_persona_agent(self, persona_type):
+        """
+        2단계 토론용 페르소나 에이전트를 반환합니다.
+        
+        특정 페르소나 유형의 에이전트를 2단계 토론용 프롬프트 제공자 함수와 함께 생성하여 반환합니다.
+        
+        Args:
+            persona_type (PersonaType): 페르소나 유형 (MARKETER, CRITIC, ENGINEER)
+            
+        Returns:
+            Agent: 해당 페르소나의 2단계 토론용 에이전트 객체
+        """
+        from config.prompts import (
+            MARKETER_PHASE2_PROMPT_PROVIDER,
+            CRITIC_PHASE2_PROMPT_PROVIDER,
+            ENGINEER_PHASE2_PROMPT_PROVIDER
+        )
+        
+        # 페르소나 유형에 따라 적절한 에이전트와 프롬프트 제공자 선택
+        if persona_type == PersonaType.MARKETER:
+            # 마케터 에이전트 생성 - 2단계 프롬프트 제공자 적용
+            persona_config = PERSONA_CONFIGS[PersonaType.MARKETER]
+            generate_config = types.GenerationConfig(
+                temperature=persona_config["temperature"],
+                max_output_tokens=persona_config["max_output_tokens"]
+            )
+            
+            agent = Agent(
+                name="marketer_agent_phase2",
+                model=self.model_name,
+                description="2단계 토론용 창의적 마케터 에이전트",
+                instruction=MARKETER_PHASE2_PROMPT_PROVIDER,  # 동적 프롬프트 제공자 함수
+                output_key="marketer_response_phase2",
+                generate_content_config=generate_config
+            )
+            
+        elif persona_type == PersonaType.CRITIC:
+            # 비판적 분석가 에이전트 생성 - 2단계 프롬프트 제공자 적용
+            persona_config = PERSONA_CONFIGS[PersonaType.CRITIC]
+            generate_config = types.GenerationConfig(
+                temperature=persona_config["temperature"],
+                max_output_tokens=persona_config["max_output_tokens"]
+            )
+            
+            agent = Agent(
+                name="critic_agent_phase2",
+                model=self.model_name,
+                description="2단계 토론용 비판적 분석가 에이전트",
+                instruction=CRITIC_PHASE2_PROMPT_PROVIDER,  # 동적 프롬프트 제공자 함수
+                output_key="critic_response_phase2",
+                generate_content_config=generate_config
+            )
+            
+        elif persona_type == PersonaType.ENGINEER:
+            # 현실적 엔지니어 에이전트 생성 - 2단계 프롬프트 제공자 적용
+            persona_config = PERSONA_CONFIGS[PersonaType.ENGINEER]
+            generate_config = types.GenerationConfig(
+                temperature=persona_config["temperature"],
+                max_output_tokens=persona_config["max_output_tokens"]
+            )
+            
+            agent = Agent(
+                name="engineer_agent_phase2",
+                model=self.model_name,
+                description="2단계 토론용 현실적 엔지니어 에이전트",
+                instruction=ENGINEER_PHASE2_PROMPT_PROVIDER,  # 동적 프롬프트 제공자 함수
+                output_key="engineer_response_phase2",
+                generate_content_config=generate_config
+            )
+            
+        else:
+            raise ValueError(f"지원되지 않는 페르소나 유형입니다: {persona_type}")
+        
+        # 디버깅 로그 출력
+        print(f"Created phase2 {persona_type.name} agent with output_key: {agent.output_key}")
+        
+        return agent
+    
+    def get_phase2_final_summary_agent(self):
+        """
+        2단계 토론 종료 후 최종 요약을 생성할 에이전트를 반환합니다.
+        
+        2단계 토론의 결과와 1단계 분석 결과를 종합하여 
+        최종 발전된 아이디어 및 실행 계획 보고서를 생성합니다.
+        
+        Returns:
+            Agent: 2단계 최종 요약 에이전트
+        """
+        from config.prompts import FINAL_SUMMARY_PHASE2_PROMPT_PROVIDER
+        
+        # 요약 에이전트의 GenerationConfig 생성
+        summary_generate_config = types.GenerationConfig(
+            temperature=0.3,  # 명확한 요약을 위해 낮은 온도 설정
+            max_output_tokens=4096  # 충분한 요약 내용을 위한 토큰 수 증가
+        )
+        
+        # 2단계 최종 요약 에이전트 생성
+        final_summary_agent = Agent(
+            name="final_summary_agent_phase2",
+            model=self.model_name,
+            description="2단계 토론 최종 요약 에이전트",
+            instruction=FINAL_SUMMARY_PHASE2_PROMPT_PROVIDER,  # 동적 프롬프트 제공자 함수
+            output_key="final_summary_report_phase2",
+            generate_content_config=summary_generate_config
+        )
+        
+        # 디버깅 로그 출력
+        print(f"Created phase2 final summary agent with output_key: {final_summary_agent.output_key}")
+        
+        return final_summary_agent 

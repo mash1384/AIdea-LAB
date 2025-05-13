@@ -393,3 +393,219 @@ Phase 1에서는 단일 페르소나 에이전트만 구현했지만, 다중 페
    * 모델 설정을 통한 LLM 선택 적용
 
 이러한 아키텍처는 모듈화, 확장성, 재사용성을 중심으로 설계되어 있으며, Google ADK의 에이전트 및 세션 관리 기능을 효과적으로 활용하고 있습니다. 사용자 경험 측면에서는 Streamlit의 채팅 인터페이스와 비동기 처리를 통해 자연스러운 대화형 분석 경험을 제공합니다.
+
+## Phase 2 토론 아키텍처
+
+### 9. src/agents/facilitator_agent.py
+
+토론 퍼실리테이터 에이전트를 구현한 클래스 파일입니다. Google ADK의 Agent 클래스를 기반으로 토론을 주도하고 다음 발언자를 결정하는 역할을 담당합니다.
+
+- **역할**: 2단계 토론을 조율하고 다음 발언자와 토론 주제를 결정하는 퍼실리테이터 역할을 수행합니다.
+- **아키텍처**:
+  - `DiscussionFacilitatorAgent` 클래스: 토론 퍼실리테이터 역할을 담당하는 클래스
+    - `__init__()`: 모델 이름과 동적 프롬프트 생성 함수를 인자로 받아 에이전트 초기화
+    - `get_agent()`: 초기화된 Agent 객체 반환
+    - `get_output_key()`: 에이전트 응답이 세션 상태에 저장될 키 반환 (facilitator_response)
+  - **핵심 기능**: JSON 형식의 출력을 생성하여 다음 단계를 결정하는 라우팅 메커니즘 제공
+    - `next_agent`: 다음 발언할 에이전트 ("marketer_agent", "critic_agent", "engineer_agent", "USER", "FINAL_SUMMARY")
+    - `message_to_next_agent_or_topic`: 다음 에이전트에게 전달할 질문 또는 토론 주제
+    - `reasoning`: 해당 에이전트/주제를 선택한 이유 설명
+
+### 10. config/prompts.py 2단계 관련 함수
+
+config/prompts.py 파일에 추가된 2단계 토론 관련 동적 프롬프트 제공자 함수들입니다.
+
+- **FACILITATOR_PHASE2_PROMPT_PROVIDER**: 토론 퍼실리테이터를 위한 동적 프롬프트 생성 함수
+  - **역할**: ReadonlyContext를 인자로 받아 현재 세션 상태에 맞게 퍼실리테이터 프롬프트를 동적으로 생성
+  - **주요 기능**: 
+    - 세션 상태에서 아이디어, 사용자 정보, 1단계 결과, 토론 히스토리 등을 가져와 프롬프트에 통합
+    - 토론 진행 상황(발언자 이력)에 따른 맞춤형 안내 제공
+    - 토론 지속 여부(종료 조건)에 대한 가이드라인 제공
+    - JSON 응답 형식 및 필수 필드 상세 정의
+
+- **MARKETER_PHASE2_PROMPT_PROVIDER**: 창의적 마케터를 위한 2단계 토론용 동적 프롬프트 생성 함수
+  - **역할**: ReadonlyContext를 인자로 받아 현재 세션 상태와 촉진자의 질문에 맞게 마케터 프롬프트 생성
+  - **주요 기능**: 
+    - 다른 페르소나의 1단계 의견을 참조하여 토론 맥락 제공
+    - 촉진자의 질문에 직접 응답하도록 유도
+    - 시장 가치와 차별화 전략에 집중하면서 아이디어 발전 방안 제시
+    - 사용자 목표와의 연결성 강조
+
+- **CRITIC_PHASE2_PROMPT_PROVIDER**: 비판적 분석가를 위한 2단계 토론용 동적 프롬프트 생성 함수
+  - **역할**: ReadonlyContext를 인자로 받아 현재 세션 상태와 촉진자의 질문에 맞게 비판적 분석가 프롬프트 생성
+  - **주요 기능**: 
+    - 논리적 분석과 핵심 리스크 평가 수행
+    - 단순 비판을 넘어 문제점 극복 방안까지 제시하도록 유도
+    - 사용자 제약조건을 기반으로 아이디어의 실현 가능성 평가
+    - 가정 검증을 위한 구체적인 방법 제안
+
+- **ENGINEER_PHASE2_PROMPT_PROVIDER**: 현실적 엔지니어를 위한 2단계 토론용 동적 프롬프트 생성 함수
+  - **역할**: ReadonlyContext를 인자로 받아 현재 세션 상태와 촉진자의 질문에 맞게 엔지니어 프롬프트 생성
+  - **주요 기능**: 
+    - 기술적 실현 방안과 단계적 구현 전략 제시
+    - 사용자 중요 가치를 실현하는 기술적 접근 방식 설명
+    - 기술적 트레이드오프를 비교하여 최적의 구현 방안 추천
+    - MVP와 이후 확장 단계를 명확히 구분하도록 유도
+
+- **FINAL_SUMMARY_PHASE2_PROMPT_PROVIDER**: 2단계 토론 최종 요약을 위한 동적 프롬프트 생성 함수
+  - **역할**: ReadonlyContext를 인자로 받아 1단계 결과와 2단계 토론 내용을 종합하는 최종 요약 프롬프트 생성
+  - **주요 기능**: 
+    - 토론 히스토리를 컨텍스트 크기에 맞게 처리하여 길이 제한 관리
+    - 최종 아이디어 설명, 주요 변경 사항, 핵심 장점, 리스크 및 완화 방안, 실행 단계 등 구조화된 보고서 요청
+    - 모든 세션 상태 정보를 종합적으로 활용하여 완전한 컨텍스트 제공
+
+### 11. src/orchestrator/main_orchestrator.py 2단계 관련 메서드
+
+AIdeaLabOrchestrator 클래스에 추가된 2단계 토론 관련 메서드들입니다.
+
+- **get_phase2_discussion_facilitator()**: 토론 퍼실리테이터 에이전트를 생성하고 반환하는 메서드
+  - **역할**: 2단계 토론을 조율할 퍼실리테이터 에이전트 인스턴스 생성
+  - **동작**: `DiscussionFacilitatorAgent` 클래스 인스턴스를 생성하고 `FACILITATOR_PHASE2_PROMPT_PROVIDER` 함수를 instruction으로 전달
+
+- **get_phase2_persona_agent(persona_type)**: 특정 페르소나의 2단계 토론용 에이전트를 생성하고 반환하는 메서드
+  - **역할**: 2단계 토론에 참여할 페르소나 에이전트를 동적 프롬프트 제공자 함수와 함께 생성
+  - **동작**: 페르소나 유형(MARKETER, CRITIC, ENGINEER)에 따라 해당 2단계 프롬프트 제공자 함수를 사용하여 에이전트 생성
+
+- **get_phase2_final_summary_agent()**: 2단계 토론 최종 요약 에이전트를 생성하고 반환하는 메서드
+  - **역할**: 2단계 토론이 종료된 후 최종 결과를 요약할 에이전트 생성
+  - **동작**: `FINAL_SUMMARY_PHASE2_PROMPT_PROVIDER` 함수를 instruction으로 사용하여 최종 요약 에이전트 생성
+
+## Phase 2 데이터 흐름
+
+2단계 토론 기능의 데이터 흐름은 다음과 같습니다:
+
+1. **토론 초기화**: 사용자가 1단계 분석을 완료하고 2단계 토론을 시작하면, ADK 세션의 `state["current_phase"]`가 "phase2"로 설정되고 `state["discussion_history_phase2"]`가 초기화됩니다.
+
+2. **퍼실리테이터 응답 처리**:
+   - 퍼실리테이터 에이전트가 호출되어 다음 발언자와 토론 주제를 결정합니다.
+   - 퍼실리테이터의 응답이 `state["facilitator_response"]`에 저장되고, 이 응답에서 JSON 부분을 파싱하여 `next_agent`와 `message_to_next_agent_or_topic`을 추출합니다.
+   - 퍼실리테이터의 응답과 결정이 `state["discussion_history_phase2"]`에 기록됩니다.
+
+3. **페르소나 에이전트 호출**:
+   - `next_agent`가 특정 페르소나(marketer_agent, critic_agent, engineer_agent)를 지정한 경우, 해당 페르소나 에이전트가 호출됩니다.
+   - 발언에 앞서 `state["facilitator_question_to_persona"]`에 `message_to_next_agent_or_topic`가 저장됩니다.
+   - 페르소나 에이전트는 2단계용 동적 프롬프트를 통해 현재 세션 상태와 퍼실리테이터의 질문을 참조하여 응답을 생성합니다.
+   - 페르소나의 응답이 `state["{persona}_response_phase2"]`에 저장되고, `state["discussion_history_phase2"]`에 기록됩니다.
+
+4. **사용자 참여 처리**:
+   - `next_agent`가 "USER"인 경우, 사용자에게 `message_to_next_agent_or_topic`가 표시되고 입력을 받습니다.
+   - 사용자의 응답이 `state["discussion_history_phase2"]`에 기록됩니다.
+
+5. **토론 종료 처리**:
+   - `next_agent`가 "FINAL_SUMMARY"인 경우, 토론이 종료되고 최종 요약 에이전트가 호출됩니다.
+   - 최종 요약 에이전트는 전체 토론 내용을 종합하여 구조화된 최종 보고서를 생성합니다.
+   - 최종 보고서가 `state["final_summary_report_phase2"]`에 저장되고 UI에 표시됩니다.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant UI as app.py (UI)
+    participant Session as ADK Session
+    participant Facilitator as DiscussionFacilitatorAgent
+    participant Persona as 페르소나 에이전트(마케터/비판가/엔지니어)
+    participant Summary as FinalSummaryAgent_Phase2
+    
+    User->>UI: 2단계 토론 시작 요청
+    UI->>Session: current_phase = "phase2" 설정
+    UI->>Session: discussion_history_phase2 = [] 초기화
+    
+    loop 토론 진행
+        UI->>Facilitator: 촉진자 에이전트 호출
+        Facilitator->>Session: 현재 상태 참조 (discussion_history_phase2 등)
+        Facilitator-->>Facilitator: 다음 행동 결정 (JSON 생성)
+        Facilitator->>Session: facilitator_response 저장
+        UI->>Session: JSON 파싱 후 next_agent, message_to_next_agent_or_topic 추출
+        UI->>Session: discussion_history_phase2 업데이트
+        
+        alt next_agent == "marketer_agent" | "critic_agent" | "engineer_agent"
+            UI->>Session: facilitator_question_to_persona 설정
+            UI->>Persona: 해당 페르소나 에이전트 호출
+            Persona->>Session: 세션 상태 참조 (facilitator_question_to_persona 등)
+            Persona-->>Persona: 토론 주제에 대한 응답 생성
+            Persona->>Session: persona_response_phase2 저장
+            UI->>Session: discussion_history_phase2 업데이트
+        else next_agent == "USER"
+            UI->>User: 토론 주제 표시 및 입력 요청
+            User->>UI: 사용자 응답 입력
+            UI->>Session: discussion_history_phase2 업데이트
+        else next_agent == "FINAL_SUMMARY"
+            UI->>Summary: 최종 요약 에이전트 호출
+            Summary->>Session: 세션 상태 참조 (discussion_history_phase2 등)
+            Summary-->>Summary: 최종 보고서 생성
+            Summary->>Session: final_summary_report_phase2 저장
+            UI->>User: 최종 보고서 표시
+            
+            Note over UI, User: 토론 종료
+        end
+    end
+```
+
+위 다이어그램은 2단계 토론의 전체 데이터 흐름과 상호작용을 보여줍니다. 퍼실리테이터 에이전트가 토론의 방향을 안내하고, 페르소나 에이전트들이 각자의 전문성을 바탕으로 토론에 참여하며, 사용자도 필요시 토론에 개입할 수 있습니다. 충분한 토론 후에는 최종 요약 에이전트가 전체 내용을 종합하여 최종 보고서를 생성합니다.
+
+### 12. src/ui/app.py 2단계 토론 UI 연동
+
+2단계 토론 흐름 제어 및 UI 연동을 담당하는 함수들입니다.
+
+- **handle_phase2_discussion()**: 2단계 토론 처리 함수
+  - **역할**: 사용자가 '2단계 토론 시작하기'를 선택했을 때 토론 프로세스를 시작하고 조율
+  - **동작**: 세션 상태 확인, 오케스트레이터 생성, 사용자 입력 처리, 토론 실행 및 상태 관리
+
+- **_run_phase2_discussion(session_id_string, orchestrator)**: 내부 비동기 토론 실행 함수
+  - **역할**: 토론 퍼실리테이터와 페르소나 에이전트들 간의 대화를 비동기적으로 실행하고 UI에 표시
+  - **동작**: 
+    - 퍼실리테이터 에이전트 응답 처리 및 JSON 파싱
+    - `next_agent` 값에 따른 라우팅 처리
+    - 페르소나 에이전트 호출 및 응답 처리
+    - 사용자 입력 요청 및 처리
+    - 최종 요약 생성 및 표시
+
+- **main()** 함수 내 상태 처리 코드:
+  - `phase2_pending_start`: 2단계 토론 준비 상태
+  - `phase2_running`: 토론 진행 중 상태
+  - `phase2_user_input`: 사용자 입력 대기 상태
+  - `phase2_complete`: 토론 완료 상태
+  - `phase2_error`: 토론 중 오류 발생 상태
+
+### 2단계 토론을 위한 Streamlit 세션 상태 변수
+
+- **awaiting_user_input_phase2**: 사용자 입력을 기다리는 상태 플래그
+- **phase2_user_prompt**: 사용자에게 표시할 질문 또는 프롬프트
+- **phase2_user_response**: 사용자가 입력한 응답
+- **phase2_discussion_complete**: 토론 종료 플래그
+- **phase2_summary_complete**: 최종 요약 완료 플래그
+
+### 2단계 토론 흐름의 기술적 구현
+
+1. **토론 초기화**:
+   - `transition_to_phase2()` 메서드를 통해 ADK 세션의 `current_phase`를 "phase2"로 설정
+   - `discussion_history_phase2` 배열 초기화
+
+2. **퍼실리테이터 응답 처리**:
+   - 빈 메시지로 퍼실리테이터 에이전트 실행 (세션 상태를 직접 참조)
+   - 응답에서 정규 표현식으로 JSON 부분 추출 및 파싱
+   - `next_agent`와 `message_to_next_agent_or_topic` 값 추출
+   - 토론 히스토리에 퍼실리테이터 발언 추가
+
+3. **라우팅 처리**:
+   - **페르소나 에이전트 호출 시**:
+     - `facilitator_question_to_persona`에 질문 설정
+     - `persona_type_map`을 사용하여 페르소나 유형 결정
+     - `get_phase2_persona_agent()`로 해당 페르소나 에이전트 생성
+     - 페르소나 응답을 UI에 표시하고 토론 히스토리에 추가
+   
+   - **사용자 참여 요청 시**:
+     - Streamlit 세션 상태 변수 설정 (`awaiting_user_input_phase2`, `phase2_user_prompt`)
+     - UI에 사용자 입력 필드 표시
+     - 사용자 응답을 토론 히스토리에 추가하고 토론 재개
+   
+   - **최종 요약 요청 시**:
+     - `get_phase2_final_summary_agent()`로 최종 요약 에이전트 생성
+     - 요약 결과를 UI에 표시하고 토론 종료
+
+4. **UI 상태 관리**:
+   - 각 분석 단계에 맞는 UI 컴포넌트 표시
+   - 사용자 입력 처리를 위한 조건부 로직
+   - 토론 진행 상황에 따른 스피너, 정보 메시지 표시
+   - 토론 완료 후 새 아이디어 분석 옵션 제공
+
+이 구현은 Google ADK의 세션 관리 및 에이전트 실행 기능과 Streamlit의 UI 컴포넌트를 효과적으로 통합하여, 사용자와 AI 페르소나 간의 매끄러운 토론 경험을 제공합니다. 또한 비동기 처리를 통해 긴 응답 생성 시간에도 UI 반응성을 유지합니다.

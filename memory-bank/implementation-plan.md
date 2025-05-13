@@ -65,80 +65,92 @@
 
 ## Phase 2: 실시간 가상 회의 (챗봇 UI 내 토론 지속)
 
+## Phase 2: 실시간 가상 회의 (챗봇 UI 내 토론 지속)
+
 **단계 6: `DiscussionFacilitatorAgent` 정의, 2단계용 프롬프트 작성 및 라우팅 메커니즘 설계**
 
-*   **지침**:
-    1.  `src/agents/facilitator_agent.py`: `DiscussionFacilitatorAgent` 클래스를 `LlmAgent`를 상속하여 정의합니다. (`name`: "facilitator_agent")
-    2.  `config/prompts.py`: **`FACILITATOR_PHASE2_PROMPT`** 를 새로 정의합니다. 이 프롬프트에는 다음이 포함됩니다:
-        *   2단계 토론 목표, 참조할 `session.state` 변수 목록(1단계 결과 전체, 사용자 목표/제약, 2단계 토론 기록).
-        *   토론 진행 방식: 첫 발언자 지정, 아이디어 평가 프레임워크(예: RICE) 또는 1단계 문제점 기반 질문 유도.
-        *   **라우팅 메커니즘**: "다음 발언자로 [페르소나_에이전트_이름]을 지목하고, [구체적인 질문/주제]를 제시하세요." 와 같이 LLM이 다음 행동을 결정하도록 유도합니다. LLM의 응답에서 다음 대상 에이전트 이름과 전달할 메시지를 추출할 수 있는 특정 출력 형식을 지정합니다. (예: JSON 형식으로 `{"next_agent": "marketer_agent", "message_to_next_agent": "1단계 보고서의 A 부분에 대해 더 자세히 설명해주세요."}`) **Google ADK의 `transfer_to_agent`는 LLM이 직접 함수 호출을 생성하는 방식이므로, 촉진자 LLM이 이러한 함수 호출을 생성하도록 프롬프트를 구성하거나, LLM의 텍스트 응답을 파싱하여 수동으로 다음 에이전트를 호출하는 커스텀 로직을 `DiscussionFacilitatorAgent` 또는 오케스트레이터 레벨에 구현합니다. 여기서는 후자(텍스트 응답 파싱 후 커스텀 위임 로직)를 우선 고려합니다.**
-        *   **토론 종료 조건**: 명확한 종료 조건(예: "총 X라운드 발언 후 종료", "주요 쟁점 해결 시 종료", "사용자 종료 요청 시" - 단, 사용자 요청은 UI에서 별도 처리 후 촉진자에게 전달)과 종료 시 출력할 특정 메시지(예: "FINAL_SUMMARY_REQUESTED")를 정의합니다.
-    3.  `src/orchestrator/main_orchestrator.py` (`AIdeaLabOrchestrator` 클래스): `DiscussionFacilitatorAgent` 인스턴스(위 프롬프트 사용)를 생성하고, 이 에이전트가 2단계 토론을 조정하도록 하는 `get_phase2_discussion_coordinator()` 메서드를 구현합니다. (페르소나 에이전트들은 촉진자의 지시에 따라 개별 호출될 것이므로, 촉진자의 `sub_agents`로 반드시 등록할 필요는 없을 수 있습니다. 대신, 촉진자 LLM의 출력을 받아 오케스트레이터가 해당 페르소나를 실행하는 구조를 고려합니다.)
-*   **테스트**:
-    1.  `FACILITATOR_PHASE2_PROMPT` 내용이 라우팅/위임 지침(다음 에이전트 및 메시지 명시) 및 종료 조건 포함 여부를 검토합니다.
-    2.  `DiscussionFacilitatorAgent`가 초기 실행 시 적절한 첫 발언(예: 토론 시작 안내)을 생성하는지 확인합니다.
+* **지침**:
+    1.  `src/agents/facilitator_agent.py`: `DiscussionFacilitatorAgent` 클래스를 `LlmAgent`를 상속하여 정의합니다. (`name`: "facilitator\_agent")
+    2.  `config/prompts.py`: **`FACILITATOR_PHASE2_PROMPT_PROVIDER`** 라는 이름의 함수를 새로 정의합니다.
+        * 이 함수는 `ReadonlyContext` (또는 `CallbackContext`) 객체를 인자로 받아, 현재 `session.state` (예: `state.initial_idea`, `state.user_goal`, 1단계 페르소나별 보고서 키, `state.discussion_history_phase2` 등)를 참조하여 **동적으로 `FACILITATOR_PHASE2_PROMPT` 문자열을 생성하여 반환**합니다.
+        * 프롬프트 내용에는 다음이 포함됩니다:
+            * 2단계 토론 목표 및 현재까지의 주요 정보 요약 (1단계 결과 요약, 사용자 목표/제약 등).
+            * 토론 진행 방식 지침: 첫 발언자 지정 (또는 LLM이 판단), 아이디어 평가 프레임워크(예: RICE) 또는 1단계에서 지적된 주요 문제점들을 기반으로 질문이나 토론 주제를 유도하는 방식.
+            * **라우팅 메커니즘 명시**: LLM이 다음 행동을 결정하도록 유도합니다. 출력은 JSON 형식을 사용하도록 명확히 지시합니다. (예: `{"next_agent": "marketer_agent" | "critic_agent" | "engineer_agent" | "USER" | "FINAL_SUMMARY", "message_to_next_agent_or_topic": "구체적인 질문 또는 다음 토론 주제", "reasoning": "왜 이 에이전트/주제를 선택했는지에 대한 간략한 근거"}`). `USER`는 사용자 피드백 요청, `FINAL_SUMMARY`는 토론 종료 및 최종 요약 요청을 의미합니다.
+            * **토론 종료 조건**: 명확한 종료 조건(예: "주요 쟁점이 충분히 논의되었고 더 이상 발전적인 의견이 없을 경우 FINAL\_SUMMARY를 요청하세요.", "사용자가 명시적으로 종료를 요청한 경우 (UI통해 전달받음)")과 종료 시 출력할 JSON의 `next_agent` 값을 "FINAL\_SUMMARY"로 지정하도록 안내.
+    3.  `src/orchestrator/main_orchestrator.py` (`AIdeaLabOrchestrator` 클래스):
+        * `DiscussionFacilitatorAgent` 인스턴스를 생성하는 메서드 `get_phase2_discussion_facilitator()`를 구현합니다. 이때, `instruction` 인자로는 위에서 정의한 `FACILITATOR_PHASE2_PROMPT_PROVIDER` 함수를 전달합니다.
+* **테스트**:
+    1.  `FACILITATOR_PHASE2_PROMPT_PROVIDER` 함수가 다양한 `session.state` 값에 따라 적절한 프롬프트를 생성하는지 단위 테스트합니다.
+    2.  `DiscussionFacilitatorAgent`가 초기 실행 시(빈 `discussion_history_phase2` 등) 적절한 첫 발언(예: 토론 시작 안내 및 첫 발언자/주제 지정)을 JSON 형식의 라우팅 지침과 함께 생성하는지 확인합니다.
 
 **단계 7: 페르소나 에이전트 2단계용 프롬프트 정의 및 적용 방식 구체화**
 
-*   **지침**:
-    1.  `config/prompts.py`: 각 페르소나(마케터, 비평가, 엔지니어)를 위한 **2단계 토론용 시스템 프롬프트**(`MARKETER_PHASE2_PROMPT`, `CRITIC_PHASE2_PROMPT`, `ENGINEER_PHASE2_PROMPT`)를 별도로 새로 정의합니다.
-        *   **핵심 포함 내용**: 현재가 "2단계 토론" 상황임을 명시, 1단계 결과물 전체 및 현재 토론 기록(`{state.discussion_history_phase2}`)/촉진자 지시(`{state.facilitator_question_to_persona}`) 참조, 다른 페르소나 의견 구체적 지칭 및 상호작용, 아이디어 "발전" 제안 장려, 사용자 목표/제약 조건 연결 설명 권장.
-    2.  **프롬프트 전환 방식**: 각 페르소나 에이전트 클래스(`MarketerPersonaAgent` 등) 내부에, `run` (또는 유사) 메서드 실행 시 `session.state.current_phase` (또는 전달받는 파라미터) 값을 확인하여, **"phase1"일 경우 1단계 프롬프트를, "phase2"일 경우 2단계 프롬프트를 `instruction`으로 사용하도록 조건부 로직을 구현합니다.** 이렇게 하면 동일한 에이전트 인스턴스를 단계에 따라 다른 행동 방식으로 사용할 수 있습니다.
-*   **테스트**:
-    1.  각 페르소나의 2단계용 프롬프트 내용이 상호작용과 아이디어 발전을 촉진하는 방향으로 작성되었는지 검토합니다.
-    2.  2단계 토론 중 특정 페르소나가 호출될 때, 해당 페르소나가 `session.state.current_phase` (또는 유사 플래그)에 따라 올바른 2단계용 프롬프트를 사용하여 응답하는지 로그 또는 디버깅으로 확인합니다.
+* **지침**:
+    1.  `config/prompts.py`: 각 페르소나(마케터, 비평가, 엔지니어)를 위한 **2단계 토론용 동적 프롬프트 제공 함수**(`MARKETER_PHASE2_PROMPT_PROVIDER`, `CRITIC_PHASE2_PROMPT_PROVIDER`, `ENGINEER_PHASE2_PROMPT_PROVIDER`)를 새로 정의합니다.
+        * 각 함수는 `ReadonlyContext` (또는 `CallbackContext`)를 인자로 받아, 현재 `session.state` (1단계 자신의 보고서 및 다른 페르소나 보고서 요약, `state.current_phase == "phase2"`인 상황, `state.discussion_history_phase2`의 관련 내용, 촉진자가 전달한 특정 질문/주제인 `{state.facilitator_question_to_persona}` 등)를 참조하여 **동적으로 해당 페르소나의 2단계용 프롬프트 문자열을 생성하여 반환**합니다.
+        * **핵심 포함 내용**: 현재가 "2단계 토론" 상황임을 명시, 촉진자의 특정 지시사항(`{state.facilitator_question_to_persona}`)에 집중하여 답변하도록 유도, 아이디어를 "발전"시키는 구체적인 제안 장려, 다른 페르소나의 의견을 구체적으로 지칭하며 자신의 관점을 개진하도록 안내, 사용자 목표/제약조건과의 연관성 설명 권장.
+    2.  **프롬프트 적용 방식**: `aidea-lab-main/src/agents/` 내의 각 페르소나 에이전트 클래스(`MarketerPersonaAgent` 등)의 `__init__`에서 `instruction`을 설정하는 대신, 또는 `AIdeaLabOrchestrator`에서 해당 페르소나 에이전트 인스턴스를 가져올 때, 위에서 정의한 각 페르소나별 `_PHASE2_PROMPT_PROVIDER` 함수를 `instruction`으로 전달하여 `LlmAgent`를 구성합니다. 이렇게 하면 에이전트가 실행될 때마다 현재 컨텍스트에 맞는 프롬프트를 사용하게 됩니다.
+* **테스트**:
+    1.  각 페르소나의 2단계용 프롬프트 제공 함수들이 다양한 `session.state` (특히 `facilitator_question_to_persona`)에 따라 적절하고 구체적인 프롬프트를 생성하는지 단위 테스트합니다.
+    2.  2단계 토론 중 특정 페르소나가 호출될 때, 해당 페르소나가 올바른 2단계용 프롬프트를 사용하여 (촉진자의 질문을 반영하여) 응답하는지 로그 또는 디버깅으로 확인합니다.
 
 **단계 8: 2단계 실시간 토론 흐름 제어 및 UI 연동 구현**
 
-*   **지침**:
-    1.  `src/ui/app.py` (`analyze_idea_phase2` 함수 또는 유사 로직): 사용자가 "2단계 토론 시작하기"를 선택하면 이 함수를 호출합니다.
-        *   `session.state.current_phase = "phase2"`로 설정합니다.
-        *   ADK `Session` (1단계와 동일 ID) 및 `Runner`를 준비합니다.
-        *   `AIdeaLabOrchestrator`를 통해 `DiscussionFacilitatorAgent` 인스턴스를 가져옵니다.
-        *   `session.state.discussion_history_phase2` 리스트를 초기화합니다.
-        *   **토론 루프 시작**:
-            1.  `DiscussionFacilitatorAgent`를 `Runner`로 실행합니다. (입력으로 현재 `discussion_history_phase2` 전달)
-            2.  촉진자의 응답을 받아 UI에 표시하고, `discussion_history_phase2`에 기록합니다.
-            3.  촉진자의 응답에서 다음 행동(다음 발언할 페르소나 이름, 그 페르소나에게 전달할 메시지/질문, 또는 토론 종료 신호)을 파싱합니다.
-            4.  만약 다음 발언할 페르소나가 있다면, 해당 페르소나 에이전트를 `Runner`로 실행합니다. (입력으로 촉진자가 전달한 메시지/질문과 `discussion_history_phase2` 전달)
-            5.  페르소나의 응답을 받아 UI에 표시하고, `discussion_history_phase2`에 기록합니다.
+* **지침**:
+    1.  `src/ui/app.py` (`handle_phase2_discussion` 또는 유사한 새 함수 정의): 사용자가 "2단계 토론 시작하기"를 선택하면 이 함수를 비동기로 실행합니다. (Streamlit 버튼 콜백에서 `asyncio.run()` 등으로 호출)
+        * `session_manager.get_session()`을 통해 현재 ADK `Session` 객체를 가져옵니다. (1단계와 동일 ID)
+        * `session.state["current_phase"] = "phase2"`로 설정하고, `session.state["discussion_history_phase2"] = []` (또는 기존 기록에 이어가는 경우 초기화 안 함)을 통해 토론 기록 리스트를 준비합니다. (이러한 상태 변경은 `session_manager.update_session_state` 와 같은 메서드를 통해 이루어지거나, 다음 에이전트 실행 시 `state_delta`로 전달되어야 합니다. 가장 간단한 방법은 `app.py`에서 `session` 객체의 `state`를 직접 수정한 후, 다음 `Runner` 실행 시 이 `session` 객체가 사용되도록 하는 것입니다. `InMemorySessionService`는 세션 객체를 참조로 다루므로 가능할 수 있으나, `state_delta`를 통해 명시적으로 전달하는 것이 ADK의 일반적인 패턴입니다. 또는 `session_manager`에 `update_current_session_state_directly(session_id, updates)` 같은 메서드 구현 고려)
+            * **보완**: `session_manager`에 `set_session_state_value(session_id, key, value)` 또는 `update_session_state_values(session_id, updates: dict)`와 같은 명시적인 상태 업데이트 메서드를 구현하고, `app.py`에서 이를 호출하여 `current_phase`와 `discussion_history_phase2`를 ADK 세션 서비스에 반영합니다. 이 업데이트는 다음 에이전트가 `ReadonlyContext`를 통해 최신 상태를 읽을 수 있도록 보장합니다.
+        * `AIdeaLabOrchestrator`를 통해 `DiscussionFacilitatorAgent` 인스턴스를 가져옵니다. (이때 에이전트의 `instruction`이 동적 함수이므로 현재 `session.state`를 올바르게 참조할 것입니다.)
+        * **토론 루프 시작 (최대 N회 반복 또는 명시적 종료 신호까지)**:
+            1.  현재 `session.state` (특히 `discussion_history_phase2`)를 포함한 `Content` 객체를 만들어 `DiscussionFacilitatorAgent`를 `Runner`로 실행합니다. (또는 촉진자 프롬프트가 `ctx.state`를 직접 참조하므로 별도 `Content`보다는 빈 `new_message`로 트리거 가능)
+            2.  촉진자의 응답(`event.actions.state_delta`에 저장된 텍스트)을 받아 UI에 표시(`add_message` 사용)하고, `discussion_history_phase2`에 `{ "speaker": "facilitator", "text": "..." }` 형태로 기록 (위에서 제안한 `session_manager`의 상태 업데이트 메서드 사용).
+            3.  촉진자의 응답 JSON을 파싱하여 `next_agent`, `message_to_next_agent_or_topic` (`topic_for_next`)을 추출합니다.
+            4.  **라우팅 처리**:
+                * `next_agent`가 "USER"이면: UI에 사용자 피드백 요청 메시지(`topic_for_next`)를 표시하고 사용자 입력을 받습니다. 입력받은 내용은 `discussion_history_phase2`에 `{ "speaker": "user", "text": "..." }` 형태로 기록 후 다시 1번(촉진자 실행)으로 갑니다.
+                * `next_agent`가 "FINAL\_SUMMARY"이면: 루프를 종료하고 단계 9로 넘어갑니다.
+                * `next_agent`가 특정 페르소나 이름이면: `session.state["facilitator_question_to_persona"] = topic_for_next` 와 같이 상태를 업데이트합니다. 해당 페르소나 에이전트 인스턴스를 가져와 (`AIdeaLabOrchestrator` 사용, 이때 instruction은 동적으로 `facilitator_question_to_persona` 등을 참조), `Runner`로 실행합니다.
+            5.  (페르소나가 실행된 경우) 페르소나의 응답을 받아 UI에 표시하고, `discussion_history_phase2`에 기록합니다.
             6.  다시 1번(촉진자 실행)으로 돌아가 토론을 이어갑니다.
-            7.  촉진자가 토론 종료 신호("FINAL_SUMMARY_REQUESTED")를 보내면 루프를 종료합니다.
-    2.  (선택 사항) 촉진자의 "ASK_USER_FEEDBACK" 요청 처리: 촉진자 응답 파싱 시 해당 신호가 있으면, UI에 사용자 입력을 받고, 그 내용을 `discussion_history_phase2`에 기록 후 다시 촉진자에게 전달하여 토론에 반영합니다.
-*   **테스트**:
-    1.  "2단계 토론 시작하기" 버튼 클릭 시, 촉진자의 첫 메시지가 UI에 나타나고 토론 루프가 시작되는지 확인합니다.
-    2.  촉진자 → 페르소나 → 촉진자 → 다른 페르소나 순으로 발언이 오고 가며, 각 발언이 UI와 `discussion_history_phase2`에 정확히 기록되는지 여러 턴에 걸쳐 테스트합니다.
-    3.  페르소나들이 서로의 의견을 참조하고, 촉진자가 적절히 토론을 이끌어가는지 확인합니다.
+    2.  UI에는 현재 발언자와 내용을 명확히 표시하고, 사용자가 토론 중간에 "토론 종료"를 요청할 수 있는 버튼을 제공하는 것을 고려합니다. (이 버튼은 촉진자에게 "사용자 종료 요청"이라는 신호를 보내도록 할 수 있습니다.)
+* **테스트**:
+    1.  "2단계 토론 시작하기" 버튼 클릭 시, `session.state.current_phase`가 "phase2"로 설정되고, 촉진자의 첫 메시지가 UI에 나타나며 토론 루프가 정상적으로 시작되는지 확인합니다.
+    2.  촉진자 -> 페르소나 -> 촉진자 -> 다른 페르소나 순으로 발언이 여러 턴에 걸쳐 오고 가는지, 각 발언이 UI와 `discussion_history_phase2`에 정확히 기록/업데이트되는지 확인합니다.
+    3.  `facilitator_question_to_persona` 상태 값이 각 페르소나 호출 전에 올바르게 설정되고, 페르소나의 응답이 해당 질문에 관련된 내용인지 확인합니다.
     4.  (선택 사항) 사용자 피드백 요청-응답-반영 흐름이 정상 작동하는지 확인합니다.
 
 **단계 9: 2단계 토론 종료 처리 및 `FinalSummaryAgent_Phase2`를 통한 최종 결과 생성/표시**
 
-*   **지침**:
-    1.  `src/ui/app.py` (`analyze_idea_phase2` 함수 내): 토론 루프 중 `DiscussionFacilitatorAgent`로부터 "FINAL_SUMMARY_REQUESTED" 신호를 받으면, 루프를 종료하고 `FinalSummaryAgent_Phase2` (`LlmAgent`)를 호출합니다.
-    2.  `config/prompts.py`: **`FINAL_SUMMARY_PHASE2_PROMPT`** 를 새로 정의합니다. 이 프롬프트는 `{state.initial_idea}`, `{state.user_goal?}`, 1단계 모든 페르소나 보고서, 그리고 2단계 전체 토론 기록(`{state.discussion_history_phase2}`)을 참조하여 "최종 발전된 아이디어 및 실행 계획 보고서"를 생성하도록 지시합니다. **이때, 보고서에는 최종 계획서 `prd.md`에 명시된 항목들(최종 아이디어 설명, 주요 변경 사항, 핵심 장점, 잠재적 리스크 및 완화 방안, 구체적인 다음 실행 단계 제안 등)이 반드시 포함되도록 상세히 작성합니다.**
-    3.  `FinalSummaryAgent_Phase2`의 결과는 `session.state.final_summary_report_phase2`에 저장합니다.
-    4.  `src/ui/app.py`: `session.state.final_summary_report_phase2`에 저장된 최종 보고서를 챗봇 UI 내에 가독성 있는 메시지(요약과 함께 상세 내용을 펼쳐볼 수 있는 형태)로 제시합니다.
-*   **테스트**:
-    1.  정의된 종료 조건에 따라 촉진자가 토론을 정상적으로 종료하고, "FINAL_SUMMARY_REQUESTED" 신호를 보내는지 확인합니다.
-    2.  `FinalSummaryAgent_Phase2`가 생성하는 보고서가 1단계 및 2단계의 모든 주요 내용을 종합하고, **위에서 언급된 구체적인 보고서 항목들을 충실히 포함하는지** 검토합니다.
+* **지침**:
+    1.  `src/ui/app.py` (`handle_phase2_discussion` 또는 유사 함수 내): 토론 루프 중 `DiscussionFacilitatorAgent`로부터 파싱된 `next_agent`가 "FINAL\_SUMMARY"이면, 루프를 종료하고 `FinalSummaryAgent_Phase2` (`LlmAgent`)를 호출합니다.
+    2.  `config/prompts.py`: **`FINAL_SUMMARY_PHASE2_PROMPT_PROVIDER`** 라는 이름의 함수를 새로 정의합니다.
+        * 이 함수는 `ReadonlyContext`를 인자로 받아, `session.state`의 모든 관련 정보 (`initial_idea`, `user_goal` 등, 1단계 모든 페르소나 보고서, 그리고 2단계 전체 `discussion_history_phase2`)를 참조하여 "최종 발전된 아이디어 및 실행 계획 보고서" 생성을 지시하는 프롬프트 문자열을 동적으로 생성합니다.
+        * **보고서 항목 명시**: 최종 계획서 `prd.md`에 명시된 항목들(최종 아이디어 설명, 주요 변경 사항, 핵심 장점, 잠재적 리스크 및 완화 방안, 구체적인 다음 실행 단계 제안 등)이 반드시 포함되도록 프롬프트에 상세히 작성합니다.
+        * **컨텍스트 크기 관리**: `discussion_history_phase2`가 매우 길 경우, 전부 포함하기보다는 핵심적인 내용이나 요약본을 전달하는 방안을 고려해야 합니다 (예: 프롬프트 제공 함수 내에서 요약 로직 수행 또는 LLM에 요약 요청 후 결과 사용).
+    3.  `AIdeaLabOrchestrator`를 통해 `FinalSummaryAgent_Phase2` 인스턴스를 가져오되, `instruction`에는 위에서 정의한 `FINAL_SUMMARY_PHASE2_PROMPT_PROVIDER` 함수를 사용합니다.
+    4.  `FinalSummaryAgent_Phase2`의 결과는 `session.state.final_summary_report_phase2`에 저장하고 (ADK `LlmAgent`의 `output_key` 사용), `app.py`에서 해당 결과를 UI에 가독성 있게 표시합니다.
+* **테스트**:
+    1.  정의된 종료 조건(예: 촉진자의 "FINAL\_SUMMARY" 라우팅)에 따라 토론이 정상적으로 종료되고 `FinalSummaryAgent_Phase2`가 호출되는지 확인합니다.
+    2.  `FinalSummaryAgent_Phase2`가 생성하는 보고서가 1단계 및 2단계의 주요 내용을 종합하고, **계획서에 명시된 구체적인 보고서 항목들을 충실히 포함하는지** 검토합니다. (컨텍스트 제한으로 인해 일부 내용이 누락되지 않는지 주의)
     3.  최종 보고서가 UI에 올바르게 표시되는지 확인합니다.
 
 **단계 10: 전체 통합 테스트, 오류 처리 전략 구체화 및 최종 검토**
 
-*   **지침**:
-    1.  Phase 1과 Phase 2의 모든 기능이 자연스럽게 연동되어 전체 사용자 시나리오대로 작동하는지 종합적으로 테스트합니다.
-    2.  다양한 아이디어 입력, 사용자 선택(1단계 종료, 2단계 진행, 사용자 피드백 제공/미제공 등)에 따른 모든 경로를 테스트합니다.
-    3.  **오류 처리 전략 구체화 및 구현**:
-        *   **API 통신 실패 (LLM 호출 시)**: `try-except` 블록을 사용하여 API 호출 부분을 감싸고, `requests.exceptions.RequestException` 또는 Gemini API 관련 특정 예외 발생 시, 사용자에게 "AI 모델 응답에 실패했습니다. 잠시 후 다시 시도해주세요."와 같은 친절한 오류 메시지를 챗봇 UI에 표시합니다. 내부적으로는 오류를 로깅합니다.
-        *   **LLM 응답 지연**: Streamlit의 스피너(`st.spinner`) 또는 유사한 기능을 사용하여 AI가 응답을 생성 중임을 사용자에게 시각적으로 알립니다. 만약 응답이 과도하게 지연될 경우(타임아웃 설정 고려), "AI 응답이 지연되고 있습니다. 잠시만 더 기다려주시거나, 문제가 지속되면 새로고침 해주세요."와 같은 메시지를 표시할 수 있습니다.
-        *   **세션 상태 관리 오류 (예상치 못한 경우)**: 주요 `session.state` 접근 시 `try-except KeyError` 등을 사용하여 방어적으로 코딩하고, 만약 필수 상태값이 없을 경우 사용자에게 "분석 진행에 필요한 정보가 부족합니다. 처음부터 다시 시도해주세요."와 같은 안내와 함께 초기화 옵션을 제공할 수 있습니다.
-        *   **일반적인 예외 처리**: 각 주요 기능(함수) 실행 부분에 포괄적인 `try-except Exception as e:` 블록을 추가하여 예기치 않은 오류 발생 시 사용자에게는 일반적인 오류 메시지("오류가 발생했습니다. 관리자에게 문의해주세요.")를 보여주고, 개발자를 위해 상세 오류 정보(`str(e)`, `traceback`)를 로깅합니다.
-    4.  UI 일관성, 응답 속도, 메시지 가독성 등 전반적인 사용성을 검토하고 개선합니다.
-*   **테스트**:
-    1.  최소 3개 이상의 다양한 아이디어를 입력하여 전체 플로우를 처음부터 끝까지 실행하고, 모든 단계에서 예상된 결과가 출력되는지 확인합니다.
-    2.  오류 처리: 의도적으로 API 키 오류, 네트워크 단절, 잘못된 LLM 응답 포맷 등을 유도하여 시스템이 정의된 오류 메시지를 UI에 표시하고 안정적으로 대처하는지 확인합니다.
-    3.  예외 상황(매우 짧거나 긴 아이디어, 특수문자 포함 아이디어 등)에 대한 시스템의 대응을 확인합니다.
+* **지침**:
+    1.  Phase 1과 Phase 2의 모든 기능이 자연스럽게 연동되어 전체 사용자 시나리오대로 작동하는지 종합적으로 테스트합니다. (다양한 아이디어, 사용자 선택 경로 포함)
+    2.  **오류 처리 전략 구체화 및 구현**:
+        * **API 통신 실패 / LLM 응답 지연**: `app.py`의 각 `Runner.run_async()` 호출 부분을 `try-except`로 감싸고, 예외 발생 시 사용자에게 "AI 모델 응답에 실패했습니다. 잠시 후 다시 시도해주세요." 또는 "응답이 지연되고 있습니다."와 같은 메시지를 `st.error` 또는 `st.warning`으로 UI에 표시합니다. `st.spinner`를 적절히 사용하여 대기 중임을 알립니다.
+        * **ADK 자체 오류**: `Event` 객체의 `error_code`, `error_message` 필드를 확인하여 (만약 ADK가 채워준다면) 해당 정보를 사용자에게 좀 더 구체적으로 안내하거나 로깅합니다. ADK가 발생시킬 수 있는 특정 Exception(예: `LlmCallsLimitExceededError`)을 개별적으로 `except` 블록에서 처리하는 것을 고려합니다.
+        * **세션 상태 관리 오류**: `session.state`에서 필수 키가 없을 경우(`KeyError`) 등을 방어적으로 처리하고, 사용자에게 "분석 진행에 필요한 정보가 부족합니다. 처음부터 다시 시도해주세요."와 같은 안내와 함께 `restart_session()` 옵션을 제공합니다.
+        * **일반적인 예외 처리**: 각 주요 기능(함수) 실행 부분에 포괄적인 `try-except Exception as e:` 블록을 추가하여 예기치 않은 오류 발생 시 사용자에게는 일반적인 오류 메시지("오류가 발생했습니다.")를 보여주고, 개발자를 위해 상세 오류 정보(`str(e)`, `traceback`)를 로깅합니다.
+    3.  UI 일관성, 응답 속도, 메시지 가독성 등 전반적인 사용성을 검토하고 개선합니다. (예: 긴 토론 내용에 대한 스크롤 처리, 가독성 높은 마크다운 포맷팅 등)
+* **테스트**:
+    1.  최소 3개 이상의 다양한 아이디어를 입력하여 전체 플로우를 처음부터 끝까지 실행하고, 모든 단계에서 예상된 결과가 출력되는지 확인합니다. (정상 경로, 예외 경로 모두 테스트)
+    2.  오류 처리: 의도적으로 API 키 오류 유도, 네트워크 단절 상황 시뮬레이션, LLM이 잘못된 형식의 JSON을 반환하는 경우(촉진자 라우팅 파싱 시) 등을 가정하여 시스템이 정의된 오류 메시지를 UI에 표시하고 안정적으로 대처하는지 확인합니다.
+    3.  매우 길거나 짧은 아이디어, 특수문자 포함 아이디어 등 예외적인 입력에 대한 시스템의 대응을 확인합니다.
     4.  최종 결과물이 프로젝트 비전 및 목표에 부합하는지 평가합니다.
+
+---
 
 이 상세 구현 계획은 AI가 제기한 질문들에 대한 답변을 포함하여, AIdea Lab 고도화 프로젝트를 더욱 체계적이고 견고하게 빌드하는 데 도움이 될 것입니다.

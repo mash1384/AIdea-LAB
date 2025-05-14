@@ -13,6 +13,7 @@ import time # stream_text_generator 에서 사용 (현재 직접 호출되지는
 from dotenv import load_dotenv
 from google.adk.runners import Runner # 실제 ADK Runner 임포트
 from google.genai import types
+from google.adk.events import Event, EventActions
 
 # 프로젝트 루트 디렉토리를 sys.path에 추가
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
@@ -374,6 +375,46 @@ def show_system_message(message_key, rerun_immediately=False):
     else:
         print(f"WARNING: System message key '{message_key}' not defined in SYSTEM_MESSAGES.")
 
+# 토론 히스토리 상태 업데이트를 위한 유틸리티 함수 (전역 함수로 이동)
+def update_discussion_history(session_id_string, speaker, text):
+    """
+    토론 히스토리를 안정적으로 업데이트하는 유틸리티 함수
+    
+    Args:
+        session_id_string (str): 세션 ID
+        speaker (str): 발언자 (facilitator, marketer_agent, critic_agent, engineer_agent, user 등)
+        text (str): 발언 내용
+    """
+    current_session = st.session_state.session_manager_instance.get_session(session_id_string)
+    if not current_session:
+        print(f"ERROR: Failed to get session with ID {session_id_string} in update_discussion_history.")
+        return
+        
+    # 최신 상태의 토론 히스토리 가져오기
+    discussion_history = current_session.state.get("discussion_history_phase2", [])
+    
+    # 새 발언 추가
+    discussion_history.append({
+        "speaker": speaker,
+        "text": text
+    })
+    
+    # EventActions를 사용하여 세션 상태 업데이트
+    state_delta = {"discussion_history_phase2": discussion_history}
+    event_actions = EventActions(state_delta=state_delta)
+    event = Event(
+        author=APP_NAME,
+        actions=event_actions
+    )
+    
+    # ADK 세션에 이벤트 추가
+    st.session_state.session_manager_instance.session_service.append_event(
+        session=current_session,
+        event=event
+    )
+    
+    print(f"DEBUG: Updated discussion_history_phase2 with {speaker}'s message. Total entries: {len(discussion_history)}")
+
 # --- 2단계 토론 실행 및 UI 업데이트 함수 ---
 async def _run_phase2_discussion(session_id_string, orchestrator):
     """
@@ -448,6 +489,9 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                         # facilitator_response 키에서 응답 추출
                         facilitator_response = state_delta.get("facilitator_response", "")
                         if facilitator_response and isinstance(facilitator_response, str):
+                            # 응답 전체를 로그로 출력 (디버깅용)
+                            print(f"\n=== FACILITATOR RESPONSE (FULL) ===\n{facilitator_response}\n=== END FACILITATOR RESPONSE ===\n")
+                            
                             # 퍼실리테이터 응답을 UI에 표시
                             show_system_message("facilitator_intro", rerun_immediately=False)
                             add_message("assistant", process_text_for_display(facilitator_response), avatar=agent_to_avatar_map["facilitator"])
@@ -456,33 +500,80 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                             import re
                             import json
                             
-                            json_pattern = r'\{[\s\S]*\}'
-                            json_matches = re.findall(json_pattern, facilitator_response)
+                            # 더 정확한 JSON 추출을 위한 패턴 개선
+                            # 마크다운 코드 블록 안의 JSON을 먼저 찾기
+                            json_in_code_block = re.search(r'```(?:json)?\s*({[\s\S]*?})\s*```', facilitator_response)
                             
-                            if json_matches:
-                                # 가장 마지막 JSON 부분 사용 (가장 완전한 형태일 가능성이 높음)
-                                json_str = json_matches[-1]
+                            # 그 다음 일반 텍스트에서 중괄호로 둘러싸인 부분 찾기
+                            json_raw_pattern = r'({[\s\S]*?})'
+                            json_matches = re.findall(json_raw_pattern, facilitator_response)
+                            
+                            parsed_successfully = False
+                            json_data = None
+                            parsing_error = None
+                            json_str_attempted = None
+                            
+                            # 먼저 코드 블록 내 JSON 파싱 시도
+                            if json_in_code_block:
+                                json_str_attempted = json_in_code_block.group(1)
                                 try:
-                                    json_data = json.loads(json_str)
-                                    next_agent = json_data.get("next_agent", "")
-                                    topic_for_next = json_data.get("message_to_next_agent_or_topic", "")
-                                    
-                                    # 토론 히스토리에 퍼실리테이터 발언 추가
-                                    # 세션 상태를 직접 수정하는 방식은 제한적일 수 있으므로 주의 필요
-                                    discussion_history = session.state.get("discussion_history_phase2", [])
-                                    discussion_history.append({
-                                        "speaker": "facilitator",
-                                        "text": facilitator_response
-                                    })
-                                    session.state["discussion_history_phase2"] = discussion_history
-                                    
-                                    print(f"DEBUG: Extracted next_agent={next_agent}, topic={topic_for_next}")
+                                    json_data = json.loads(json_str_attempted)
+                                    parsed_successfully = True
+                                    print(f"INFO: Successfully parsed JSON from code block")
                                 except json.JSONDecodeError as e:
-                                    print(f"ERROR: Failed to parse JSON from facilitator_response: {e}")
-                                    print(f"JSON string attempted to parse: {json_str}")
-                            else:
-                                print(f"WARNING: No JSON pattern found in facilitator_response")
+                                    parsing_error = str(e)
+                                    print(f"WARNING: Failed to parse JSON from code block: {e}")
                             
+                            # 실패한 경우 일반 텍스트에서 찾은 중괄호 블록 시도
+                            if not parsed_successfully and json_matches:
+                                for json_str in json_matches:
+                                    json_str_attempted = json_str
+                                    try:
+                                        json_data = json.loads(json_str)
+                                        parsed_successfully = True
+                                        print(f"INFO: Successfully parsed JSON from regular text")
+                                        break
+                                    except json.JSONDecodeError:
+                                        # 계속 다음 매치 시도
+                                        continue
+                            
+                            # 마지막 시도: 응답 전체를 JSON으로 파싱
+                            if not parsed_successfully:
+                                json_str_attempted = facilitator_response
+                                try:
+                                    json_data = json.loads(facilitator_response)
+                                    parsed_successfully = True
+                                    print(f"INFO: Parsed entire response as JSON")
+                                except json.JSONDecodeError as e:
+                                    parsing_error = str(e)
+                                    print(f"ERROR: Failed to parse any JSON from facilitator_response: {e}")
+                                    print(f"Response is not valid JSON: {facilitator_response[:200]}...")
+                            
+                            if parsed_successfully and json_data:
+                                next_agent = json_data.get("next_agent", "")
+                                topic_for_next = json_data.get("message_to_next_agent_or_topic", "")
+                                reasoning = json_data.get("reasoning", "")
+                                
+                                print(f"DEBUG: Extracted JSON data from facilitator_response:")
+                                print(f"  - next_agent: {next_agent}")
+                                print(f"  - topic: {topic_for_next[:50]}...")
+                                print(f"  - reasoning: {reasoning[:50]}...")
+                                
+                                # 토론 히스토리에 퍼실리테이터 발언 추가
+                                update_discussion_history(session_id_string, "facilitator", facilitator_response)
+                            else:
+                                # JSON 파싱 실패 시 오류 처리
+                                print(f"ERROR: Could not extract valid JSON from facilitator_response")
+                                if json_str_attempted:
+                                    print(f"Last JSON string attempted to parse: {json_str_attempted[:200]}...")
+                                
+                                # 오류 발생 시 기본값 설정하여 계속 진행
+                                next_agent = "FINAL_SUMMARY"  # 기본적으로 토론 종료
+                                topic_for_next = "토론 진행 중 오류가 발생하여 최종 요약으로 진행합니다."
+                                
+                                # 오류 메시지를 대화에 추가
+                                show_system_message("phase2_error", rerun_immediately=False)
+                                
                             # UI 업데이트를 위해 필요
                             st.session_state.need_rerun = True
                 
@@ -546,6 +637,10 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                                 # 최종 요약을 UI에 표시
                                 show_system_message("final_summary_phase2_intro", rerun_immediately=False)
                                 add_message("assistant", process_text_for_display(final_summary), avatar=agent_to_avatar_map["final_summary"])
+                                
+                                # 토론 히스토리에 최종 요약 추가
+                                update_discussion_history(session_id_string, "final_summary", final_summary)
+                                
                                 final_summary_processed = True
                     
                     # 최종 요약 완료 상태 설정
@@ -631,12 +726,7 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                                 add_message("assistant", process_text_for_display(persona_response), avatar=agent_to_avatar_map[next_agent])
                                 
                                 # 토론 히스토리에 페르소나 발언 추가
-                                discussion_history = session.state.get("discussion_history_phase2", [])
-                                discussion_history.append({
-                                    "speaker": next_agent,
-                                    "text": persona_response
-                                })
-                                session.state["discussion_history_phase2"] = discussion_history
+                                update_discussion_history(session_id_string, next_agent, persona_response)
                                 
                                 # UI 업데이트를 위해 필요
                                 st.session_state.need_rerun = True
@@ -670,6 +760,9 @@ def handle_phase2_discussion():
     토론 퍼실리테이터 에이전트와 페르소나 에이전트들 간의 대화를 조율합니다.
     """
     try:
+        # 올바른 EventActions 임포트 경로
+        from google.adk.events import Event, EventActions
+        
         print("Starting Phase 2 discussion...")
         
         # 현재 세션 상태 확인
@@ -682,8 +775,8 @@ def handle_phase2_discussion():
         print(f"Created local orchestrator with model: {st.session_state.selected_model}")
         
         # 세션 ID 가져오기
-        session_id = st.session_state.adk_session_id
-        if not session_id:
+        session_id_string = st.session_state.adk_session_id
+        if not session_id_string:
             print("ERROR: No session ID available for phase 2 discussion")
             st.session_state.analysis_phase = "phase2_error"
             show_system_message("phase2_error")
@@ -691,9 +784,9 @@ def handle_phase2_discussion():
             return
         
         # 세션 객체 가져오기
-        session = st.session_state.session_manager_instance.get_session(session_id)
+        session = st.session_state.session_manager_instance.get_session(session_id_string)
         if not session:
-            print(f"ERROR: Failed to get session with ID {session_id}")
+            print(f"ERROR: Failed to get session with ID {session_id_string}")
             st.session_state.analysis_phase = "phase2_error"
             show_system_message("phase2_error")
             st.session_state.need_rerun = True
@@ -707,12 +800,8 @@ def handle_phase2_discussion():
             # 1. discussion_history_phase2에 사용자 응답 추가
             user_response = st.session_state.get("phase2_user_response", "")
             if user_response:
-                discussion_history = session.state.get("discussion_history_phase2", [])
-                discussion_history.append({
-                    "speaker": "user",
-                    "text": user_response
-                })
-                session.state["discussion_history_phase2"] = discussion_history
+                # update_discussion_history 함수 사용하여 사용자 응답 추가
+                update_discussion_history(session_id_string, "user", user_response)
                 
                 # 사용자 입력 상태 초기화
                 st.session_state.awaiting_user_input_phase2 = False
@@ -733,7 +822,7 @@ def handle_phase2_discussion():
         # 2단계 토론 실행
         with st.spinner("AI 페르소나들이 토론 중입니다... 이 작업은 최대 1-2분 소요될 수 있습니다."):
             discussion_success = asyncio.run(_run_phase2_discussion(
-                session_id,
+                session_id_string,
                 orchestrator
             ))
         

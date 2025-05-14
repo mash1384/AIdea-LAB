@@ -32,7 +32,7 @@ class DiscussionFacilitatorAgent:
         # 온도 및 출력 토큰 설정
         generate_config = types.GenerationConfig(
             temperature=0.7,  # 다양한 방향의 토론 진행을 위해 약간 더 높은 온도 사용
-            max_output_tokens=1024  # 충분한 토론 진행을 위한 토큰 수
+            max_output_tokens=4096  # 충분한 토론 진행을 위한 토큰 수
         )
 
         # 에이전트 생성

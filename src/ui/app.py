@@ -50,6 +50,10 @@ SYSTEM_MESSAGES = {
     "summary_phase1_intro": "**📝 최종 요약 및 종합:**", # summary_phase1 키와 일치하도록 수정
     "phase1_complete": "**1단계 분석이 완료되었습니다.**",
     "phase1_error": "**분석 중 오류가 발생했습니다.** 다시 시도하거나 새로운 아이디어를 입력해주세요.",
+    # 중간 요약 소개 메시지 추가
+    "marketer_summary_intro": "**📄 마케터 보고서 요약:**",
+    "critic_summary_intro": "**📄 비판적 분석가 보고서 요약:**",
+    "engineer_summary_intro": "**📄 현실주의 엔지니어 보고서 요약:**",
     # 2단계 관련 메시지 추가
     "phase2_welcome": "**2단계 심층 토론을 시작합니다.** 퍼실리테이터의 진행에 따라 각 페르소나가 아이디어에 대해 토론합니다.",
     "facilitator_intro": "**🎯 토론 퍼실리테이터:**",
@@ -73,7 +77,11 @@ persona_avatars = {
     "marketer_phase2": "💡",
     "critic_phase2": "🔍",
     "engineer_phase2": "⚙️",
-    "final_summary_phase2": "📊"
+    "final_summary_phase2": "📊",
+    # 중간 요약 아바타 추가
+    "marketer_summary": "📄",
+    "critic_summary": "📄",
+    "engineer_summary": "📄"
 }
 
 print(f"Initialized persona avatars: {persona_avatars}")
@@ -91,13 +99,58 @@ async def _run_phase1_analysis(runner: Runner, session_id_string: str, content: 
     
     # 응답 검증 및 대체 메커니즘 함수
     def validate_agent_response(response_text, agent_name, output_key):
-        if not response_text or not isinstance(response_text, str) or len(response_text.strip()) < 20:
+        # 중간 요약 응답인지 확인
+        is_summary_response = "_summary" in output_key
+        
+        # 기본 유효성 검사: 응답이 없거나 문자열이 아니거나 너무 짧은 경우
+        if not response_text:
+            print(f"DEBUG_VALIDATION: OutputKey '{output_key}', Reason: Response is empty or None.")
+            basic_validation_failed = True
+        elif not isinstance(response_text, str):
+            print(f"DEBUG_VALIDATION: OutputKey '{output_key}', Reason: Response is not a string (type: {type(response_text)}).")
+            basic_validation_failed = True
+        elif len(response_text.strip()) < 20:
+            print(f"DEBUG_VALIDATION: OutputKey '{output_key}', Reason: Response length ({len(response_text.strip())}) is less than 20.")
+            basic_validation_failed = True
+        else:
+            basic_validation_failed = False
+        
+        # 중간 요약 응답에 대한 추가 유효성 검사
+        if is_summary_response and not basic_validation_failed:
+            # "핵심 포인트:"와 "종합 요약:" 문자열이 모두 포함되어 있는지 확인
+            has_key_points = "핵심 포인트:" in response_text
+            has_summary = "종합 요약:" in response_text
+            
+            # 각 필수 요소에 대한 검증 로그 추가
+            if not has_key_points:
+                print(f"DEBUG_VALIDATION: OutputKey '{output_key}', Reason: Missing '핵심 포인트:' in summary.")
+            
+            if not has_summary:
+                print(f"DEBUG_VALIDATION: OutputKey '{output_key}', Reason: Missing '종합 요약:' in summary.")
+            
+            # 두 문자열이 모두 포함되어 있지 않으면 유효하지 않음
+            if not (has_key_points and has_summary):
+                print(f"WARNING: Summary response from {agent_name} for {output_key} is missing required format elements. Generating fallback response.")
+                basic_validation_failed = True
+        
+        # 유효하지 않은 응답에 대한 대체 응답 생성
+        if basic_validation_failed:
             print(f"WARNING: Invalid response from {agent_name} for {output_key}. Generating fallback response.")
+            
             # 기본 대체 응답 생성
             fallback_response = f"[{agent_name}에서 유효한 응답을 받지 못했습니다. 이 메시지는 자동 생성된 대체 응답입니다.]"
-            if "summary" in output_key:
-                fallback_response = f"**핵심 포인트:**\n- 이 보고서는 요약 중 오류가 발생하여 자동 생성되었습니다.\n\n**종합 요약:**\n해당 페르소나의 원본 보고서를 참고해 주세요."
+            
+            # 중간 요약 응답인 경우, 지정된 형식에 맞는 대체 응답 생성
+            if is_summary_response:
+                fallback_response = """**핵심 포인트:**
+- 이 보고서는 요약 중 오류가 발생하여 자동 생성되었습니다.
+- 원본 보고서의 내용을 참고해주세요.
+
+**종합 요약:**
+해당 페르소나의 원본 보고서에 대한 요약 생성에 실패했습니다. 원본 보고서를 직접 확인해주시기 바랍니다."""
+            
             return fallback_response
+            
         return response_text
     
     # 부분 결과로 프로세스 완료하는 함수
@@ -156,6 +209,14 @@ async def _run_phase1_analysis(runner: Runner, session_id_string: str, content: 
             if is_final_event and state_delta:
                 for output_key_in_delta, response_text in state_delta.items():
                     if output_key_in_delta in output_keys_map.values() and output_key_in_delta not in processed_sub_agent_outputs:
+                        # 원본 페르소나 보고서인 경우 길이를 로그로 출력
+                        if "report_phase1" in output_key_in_delta and "_summary" not in output_key_in_delta:
+                            print(f"DEBUG_REPORT_LENGTH: Agent '{agent_author}', OutputKey: '{output_key_in_delta}', Length: {len(response_text)} chars")
+                            
+                        # 중간 요약 에이전트의 응답인 경우 원본 응답을 로그로 출력
+                        if "report_phase1_summary" in output_key_in_delta:
+                            print(f"DEBUG_LLM_RAW_RESPONSE: Agent '{agent_author}', OutputKey: '{output_key_in_delta}', RawResponse: '{response_text}'")
+                        
                         # 응답 검증 및 필요 시 대체 응답 생성
                         validated_response = validate_agent_response(response_text, agent_author, output_key_in_delta)
                         
@@ -171,14 +232,17 @@ async def _run_phase1_analysis(runner: Runner, session_id_string: str, content: 
                                         actions=event_actions,
                                         author=f"{agent_author}_fallback"
                                     )
-                                    st.session_state.session_manager_instance.session_service.append_event(
-                                        app_name=APP_NAME,
-                                        user_id=USER_ID,
-                                        session_id=session_id_string,
-                                        event=new_event
-                                    )
+                                    try:
+                                        # 수정된 부분: 불필요한 키워드 인자 제거하고 session 객체 전달
+                                        st.session_state.session_manager_instance.session_service.append_event(
+                                            session=session,
+                                            event=new_event
+                                        )
+                                        print(f"INFO: Successfully updated session with fallback response for {output_key_in_delta}")
+                                    except Exception as e:
+                                        print(f"ERROR: Failed to update session with fallback response: {e}")
                             except Exception as e:
-                                print(f"WARNING: Failed to update session with fallback response: {e}")
+                                print(f"ERROR: Session retrieval or event creation failed: {e}")
                         
                         print(f"DEBUG: Valid response text found for output_key '{output_key_in_delta}' from agent '{agent_author}'.")
                         
@@ -195,9 +259,12 @@ async def _run_phase1_analysis(runner: Runner, session_id_string: str, content: 
 
                             if intro_content:
                                 add_message("system", intro_content, avatar="ℹ️")
+                                print(f"INFO: Adding intro message with key '{intro_message_key}' for persona '{persona_key_for_display}'")
                             else:
                                 print(f"WARNING: Intro message content not found for key '{intro_message_key}' (Persona key: {persona_key_for_display})")
 
+                            # 로그 추가: 어떤 아바타가 사용되는지 확인
+                            print(f"INFO: Using avatar '{avatar_char}' for persona '{persona_key_for_display}'")
                             add_message("assistant", process_text_for_display(validated_response), avatar=avatar_char)
                         else:
                             print(f"WARNING: Could not map output_key '{output_key_in_delta}' to persona_key for UI display (Agent: {agent_author}).")
@@ -514,7 +581,10 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
             "critic_agent": persona_avatars.get("critic_phase2", "🔍"),
             "engineer_agent": persona_avatars.get("engineer_phase2", "⚙️"),
             "user": persona_avatars.get("user", "🧑‍💻"),
-            "final_summary": persona_avatars.get("final_summary_phase2", "📊")
+            "final_summary": persona_avatars.get("final_summary_phase2", "📊"),
+            "marketer_summary": persona_avatars.get("marketer_summary", "📄"),
+            "critic_summary": persona_avatars.get("critic_summary", "📄"),
+            "engineer_summary": persona_avatars.get("engineer_summary", "📄")
         }
         
         # 토론 퍼실리테이터 에이전트 가져오기
@@ -525,7 +595,7 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
         current_round = 0
         
         # 토론 루프 시작
-        while current_round < max_discussion_rounds:
+        while current_round <= max_discussion_rounds:
             current_round += 1
             print(f"DEBUG: Starting discussion round {current_round}/{max_discussion_rounds}")
             
@@ -623,6 +693,13 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                                 next_agent = json_data.get("next_agent", "")
                                 topic_for_next = json_data.get("message_to_next_agent_or_topic", "")
                                 reasoning = json_data.get("reasoning", "")
+                                
+                                # 마지막 라운드에 도달했는데 FINAL_SUMMARY가 아니라면 강제로 FINAL_SUMMARY로 설정
+                                if current_round >= max_discussion_rounds and next_agent != "FINAL_SUMMARY":
+                                    print(f"INFO: Forcing transition to FINAL_SUMMARY at round {current_round}/{max_discussion_rounds}")
+                                    next_agent = "FINAL_SUMMARY"
+                                    topic_for_next = "최대 토론 라운드에 도달하여 최종 요약을 진행합니다."
+                                    add_message("system", topic_for_next, avatar="ℹ️")
                                 
                                 print(f"DEBUG: Extracted JSON data from facilitator_response:")
                                 print(f"  - next_agent: {next_agent}")
@@ -808,10 +885,111 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                 # 오류가 있어도 토론을 계속 시도
         
         # 최대 라운드에 도달한 경우
-        if current_round >= max_discussion_rounds:
-            print(f"DEBUG: Reached maximum discussion rounds ({max_discussion_rounds})")
+        if current_round > max_discussion_rounds and not st.session_state.get("phase2_summary_complete", False):
+            print(f"DEBUG: Reached maximum discussion rounds ({max_discussion_rounds}) without completing summary")
             show_system_message("phase2_complete", rerun_immediately=False)
             st.session_state.phase2_discussion_complete = True
+            
+            # 최종 요약이 아직 실행되지 않았다면 강제로 실행
+            print("INFO: Forcing final summary generation after reaching maximum discussion rounds")
+            add_message("system", "최대 토론 라운드에 도달하여 최종 요약을 진행합니다.", avatar="ℹ️")
+            
+            # 최종 요약 에이전트 실행
+            final_summary_agent = orchestrator.get_phase2_final_summary_agent()
+            
+            runner = Runner(
+                agent=final_summary_agent,
+                app_name=APP_NAME,
+                session_service=st.session_state.session_manager_instance.session_service
+            )
+            
+            # 빈 메시지로 실행하여 세션 상태를 직접 참조하도록 함
+            input_content = types.Content(role="user", parts=[types.Part(text="")])
+            
+            # 최종 요약 에이전트 실행
+            event_stream = runner.run_async(
+                user_id=USER_ID,
+                session_id=session_id_string,
+                new_message=input_content
+            )
+            
+            # 최종 요약 처리
+            final_summary_processed = False
+            
+            async for event in event_stream:
+                is_final_event = event.is_final_response() if hasattr(event, 'is_final_response') else False
+                event_actions = getattr(event, 'actions', None)
+                state_delta = getattr(event_actions, 'state_delta', None) if event_actions else None
+                
+                if is_final_event and state_delta:
+                    final_summary = state_delta.get("final_summary_report_phase2", "")
+                    if final_summary and isinstance(final_summary, str):
+                        # 최종 요약을 UI에 표시
+                        show_system_message("final_summary_phase2_intro", rerun_immediately=False)
+                        add_message("assistant", process_text_for_display(final_summary), avatar=agent_to_avatar_map["final_summary"])
+                        
+                        # 토론 히스토리에 최종 요약 추가
+                        update_discussion_history(session_id_string, "final_summary", final_summary)
+                        
+                        final_summary_processed = True
+                
+                # 최종 요약 완료 상태 설정
+                st.session_state.phase2_summary_complete = final_summary_processed
+            
+            st.session_state.need_rerun = True
+        
+        # 최대 라운드에 도달했지만 FINAL_SUMMARY가 실행되지 않은 경우를 위한 안전장치
+        if current_round > max_discussion_rounds and not st.session_state.get("phase2_summary_complete", False):
+            print(f"DEBUG: Loop completed at maximum rounds but summary not generated. Forcing summary generation.")
+            show_system_message("phase2_complete", rerun_immediately=False)
+            st.session_state.phase2_discussion_complete = True
+            
+            # 최종 요약 강제 실행
+            print("INFO: Executing final summary generation after loop completion")
+            add_message("system", "최대 토론 라운드에 도달하여 최종 요약을 진행합니다.", avatar="ℹ️")
+            
+            # 최종 요약 에이전트 실행
+            final_summary_agent = orchestrator.get_phase2_final_summary_agent()
+            
+            runner = Runner(
+                agent=final_summary_agent,
+                app_name=APP_NAME,
+                session_service=st.session_state.session_manager_instance.session_service
+            )
+            
+            # 빈 메시지로 실행하여 세션 상태를 직접 참조하도록 함
+            input_content = types.Content(role="user", parts=[types.Part(text="")])
+            
+            # 최종 요약 에이전트 실행
+            event_stream = runner.run_async(
+                user_id=USER_ID,
+                session_id=session_id_string,
+                new_message=input_content
+            )
+            
+            # 최종 요약 처리
+            final_summary_processed = False
+            
+            async for event in event_stream:
+                is_final_event = event.is_final_response() if hasattr(event, 'is_final_response') else False
+                event_actions = getattr(event, 'actions', None)
+                state_delta = getattr(event_actions, 'state_delta', None) if event_actions else None
+                
+                if is_final_event and state_delta:
+                    final_summary = state_delta.get("final_summary_report_phase2", "")
+                    if final_summary and isinstance(final_summary, str):
+                        # 최종 요약을 UI에 표시
+                        show_system_message("final_summary_phase2_intro", rerun_immediately=False)
+                        add_message("assistant", process_text_for_display(final_summary), avatar=agent_to_avatar_map["final_summary"])
+                        
+                        # 토론 히스토리에 최종 요약 추가
+                        update_discussion_history(session_id_string, "final_summary", final_summary)
+                        
+                        final_summary_processed = True
+                
+                # 최종 요약 완료 상태 설정
+                st.session_state.phase2_summary_complete = final_summary_processed
+            
             st.session_state.need_rerun = True
         
         return True  # 토론 진행 성공

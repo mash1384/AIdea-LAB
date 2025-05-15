@@ -6,6 +6,7 @@ AIdea Lab 모델 성능 모니터링 시스템
 """
 
 import time
+import asyncio
 from typing import Dict, List, Any, Optional, Tuple
 import json
 import os
@@ -197,23 +198,57 @@ def monitor_model_performance(monitor: AIModelMonitor):
         monitor (AIModelMonitor): 모니터링 인스턴스
     """
     def decorator(func):
-        def wrapper(*args, **kwargs):
-            model_name = kwargs.get('model_name', 'unknown')
-            start_time = time.time()
-            success = True
-            error_type = None
+        # 비동기 함수인지 확인
+        if asyncio.iscoroutinefunction(func):
+            # 비동기 함수를 위한 래퍼
+            async def wrapper(*args, **kwargs):
+                # kwargs에서 model_name 추출, 없으면 'unknown'을 사용
+                model_name = kwargs.get('model_name', 'unknown')
+                # orchestrator 객체에서 model_name 추출 시도
+                if model_name == 'unknown' and args and hasattr(args[0], 'model_name'):
+                    model_name = args[0].model_name
+                
+                start_time = time.time()
+                success = True
+                error_type = None
+                
+                try:
+                    # 비동기 함수 호출 시 await 사용
+                    result = await func(*args, **kwargs)
+                    return result
+                except Exception as e:
+                    success = False
+                    error_type = type(e).__name__
+                    raise
+                finally:
+                    response_time = time.time() - start_time
+                    monitor.record_api_call(model_name, success, response_time, error_type)
             
-            try:
-                result = func(*args, **kwargs)
-                return result
-            except Exception as e:
-                success = False
-                error_type = type(e).__name__
-                raise
-            finally:
-                response_time = time.time() - start_time
-                monitor.record_api_call(model_name, success, response_time, error_type)
-        
-        return wrapper
+            return wrapper
+        else:
+            # 동기 함수를 위한 기존 래퍼
+            def wrapper(*args, **kwargs):
+                # kwargs에서 model_name 추출, 없으면 'unknown'을 사용
+                model_name = kwargs.get('model_name', 'unknown')
+                # orchestrator 객체에서 model_name 추출 시도
+                if model_name == 'unknown' and args and hasattr(args[0], 'model_name'):
+                    model_name = args[0].model_name
+                
+                start_time = time.time()
+                success = True
+                error_type = None
+                
+                try:
+                    result = func(*args, **kwargs)
+                    return result
+                except Exception as e:
+                    success = False
+                    error_type = type(e).__name__
+                    raise
+                finally:
+                    response_time = time.time() - start_time
+                    monitor.record_api_call(model_name, success, response_time, error_type)
+            
+            return wrapper
     
     return decorator 

@@ -21,15 +21,16 @@ from src.orchestrator.main_orchestrator import AIdeaLabOrchestrator
 from src.session_manager import SessionManager
 from config.personas import PERSONA_CONFIGS, PersonaType, ORCHESTRATOR_CONFIG, PERSONA_SEQUENCE
 from config.models import get_model_display_options, MODEL_CONFIGS, ModelType, DEFAULT_MODEL
+from src.utils.model_monitor import AIModelMonitor, monitor_model_performance
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
 
-# Streamlit 페이지 설정
+# Streamlit 페이지 설정 (모든 import 후, 다른 Streamlit 명령어 이전에 배치)
 st.set_page_config(
     page_title="AIdea Lab - 아이디어 분석 워크숍",
     page_icon="🧠",
-    layout="centered"
+    layout="wide"
 )
 
 # 앱 정보
@@ -77,20 +78,57 @@ persona_avatars = {
 
 print(f"Initialized persona avatars: {persona_avatars}")
 
+# 모델 모니터링 인스턴스 생성
+model_monitor = AIModelMonitor(log_file_path="logs/model_performance.json")
 
-# 텍스트를 단어 단위로 스트리밍하는 함수 (구현 계획서에 따라, 현재는 직접 사용되지 않음)
-def stream_text_generator(text: str):
-    words = text.split(' ')
-    for word in words:
-        yield word + " "
-        time.sleep(0.05) # 단어 사이에 약간의 지연 추가
-
-# --- run_phase1_analysis_and_update_ui 내부에서 호출될 비동기 함수 ---
+# monitor_model_performance 데코레이터 적용 (기존 함수 앞에 추가)
+@monitor_model_performance(model_monitor)
 async def _run_phase1_analysis(runner: Runner, session_id_string: str, content: types.Content, orchestrator: AIdeaLabOrchestrator):
     print(f"DEBUG: _run_phase1_analysis - Starting with session_id: {session_id_string}")
     
     workflow_completed = False
     any_response_processed_successfully = False
+    
+    # 응답 검증 및 대체 메커니즘 함수
+    def validate_agent_response(response_text, agent_name, output_key):
+        if not response_text or not isinstance(response_text, str) or len(response_text.strip()) < 20:
+            print(f"WARNING: Invalid response from {agent_name} for {output_key}. Generating fallback response.")
+            # 기본 대체 응답 생성
+            fallback_response = f"[{agent_name}에서 유효한 응답을 받지 못했습니다. 이 메시지는 자동 생성된 대체 응답입니다.]"
+            if "summary" in output_key:
+                fallback_response = f"**핵심 포인트:**\n- 이 보고서는 요약 중 오류가 발생하여 자동 생성되었습니다.\n\n**종합 요약:**\n해당 페르소나의 원본 보고서를 참고해 주세요."
+            return fallback_response
+        return response_text
+    
+    # 부분 결과로 프로세스 완료하는 함수
+    async def complete_with_partial_results():
+        session = orchestrator.session_manager_instance.get_session(session_id_string)
+        if not session:
+            return False
+            
+        # 현재까지 수집된 응답 확인
+        state = session.state
+        processed_keys = [k for k in state.keys() if k.endswith("_phase1") or k.endswith("_phase1_summary")]
+        
+        if not processed_keys:
+            return False
+            
+        # 최종 요약이 없는 경우 간단한 요약 생성
+        if "summary_report_phase1" not in state or not state["summary_report_phase1"]:
+            # 부분 결과를 바탕으로 간단한 요약 메시지 생성
+            message = "## 아이디어 분석 요약\n\n"
+            message += "일부 페르소나의 분석이 완료되었습니다. 분석 과정에서 일부 오류가 발생했지만, 제공된 정보를 바탕으로 요약합니다.\n\n"
+            
+            for key in processed_keys:
+                if state.get(key) and not key.endswith("_summary"):
+                    persona_name = key.split("_")[0].capitalize()
+                    message += f"### {persona_name} 분석\n"
+                    message += state[key][:300] + "...\n\n"
+                    
+            add_message("system", "**📝 부분 결과 기반 요약:**", avatar="ℹ️")
+            add_message("assistant", process_text_for_display(message), avatar="📝")
+            
+        return True
     
     try:
         output_keys_map = orchestrator.get_output_keys_phase1() 
@@ -114,42 +152,65 @@ async def _run_phase1_analysis(runner: Runner, session_id_string: str, content: 
             state_delta = getattr(event_actions, 'state_delta', None) if event_actions else None
 
             print(f"DEBUG_EVENT: Author='{agent_author}', IsFinal='{is_final_event}', HasStateDelta='{state_delta is not None}'")
-            # print(f"DEBUG_EVENT_DETAILS: Event ID={getattr(event,'id','N/A')}, Timestamp={getattr(event,'timestamp','N/A')}, Content={getattr(event,'content',None)}, Actions={event_actions}")
 
             if is_final_event and state_delta:
                 for output_key_in_delta, response_text in state_delta.items():
                     if output_key_in_delta in output_keys_map.values() and output_key_in_delta not in processed_sub_agent_outputs:
-                        if response_text and isinstance(response_text, str) and len(response_text.strip()) > 10:
-                            print(f"DEBUG: Valid response text found for output_key '{output_key_in_delta}' from agent '{agent_author}'.")
-                            
-                            processed_sub_agent_outputs.add(output_key_in_delta)
-                            any_response_processed_successfully = True
+                        # 응답 검증 및 필요 시 대체 응답 생성
+                        validated_response = validate_agent_response(response_text, agent_author, output_key_in_delta)
+                        
+                        if validated_response != response_text:
+                            # 대체 응답이 생성되었으면 세션 상태 업데이트
+                            try:
+                                session = st.session_state.session_manager_instance.get_session(session_id_string)
+                                if session:
+                                    event_actions = EventActions(
+                                        state_delta={output_key_in_delta: validated_response}
+                                    )
+                                    new_event = Event(
+                                        actions=event_actions,
+                                        author=f"{agent_author}_fallback"
+                                    )
+                                    st.session_state.session_manager_instance.session_service.append_event(
+                                        app_name=APP_NAME,
+                                        user_id=USER_ID,
+                                        session_id=session_id_string,
+                                        event=new_event
+                                    )
+                            except Exception as e:
+                                print(f"WARNING: Failed to update session with fallback response: {e}")
+                        
+                        print(f"DEBUG: Valid response text found for output_key '{output_key_in_delta}' from agent '{agent_author}'.")
+                        
+                        processed_sub_agent_outputs.add(output_key_in_delta)
+                        any_response_processed_successfully = True
 
-                            persona_key_for_display = output_key_to_persona_key_map.get(output_key_in_delta)
-                            
-                            if persona_key_for_display:
-                                intro_message_key_base = persona_key_for_display
-                                intro_message_key = f"{intro_message_key_base}_intro" 
-                                # summary_phase1의 경우 intro_message_key는 "summary_phase1_intro"가 됨
-                                intro_content = SYSTEM_MESSAGES.get(intro_message_key)
-                                avatar_char = persona_avatars.get(intro_message_key_base, "🤖")
+                        persona_key_for_display = output_key_to_persona_key_map.get(output_key_in_delta)
+                        
+                        if persona_key_for_display:
+                            intro_message_key_base = persona_key_for_display
+                            intro_message_key = f"{intro_message_key_base}_intro" 
+                            intro_content = SYSTEM_MESSAGES.get(intro_message_key)
+                            avatar_char = persona_avatars.get(intro_message_key_base, "🤖")
 
-                                if intro_content:
-                                    add_message("system", intro_content, avatar="ℹ️")
-                                else: # intro 메시지를 찾지 못한 경우 로그 남기기 (특히 summary_phase1_intro 확인)
-                                     print(f"WARNING: Intro message content not found for key '{intro_message_key}' (Persona key: {persona_key_for_display})")
-
-                                add_message("assistant", process_text_for_display(response_text), avatar=avatar_char)
+                            if intro_content:
+                                add_message("system", intro_content, avatar="ℹ️")
                             else:
-                                print(f"WARNING: Could not map output_key '{output_key_in_delta}' to persona_key for UI display (Agent: {agent_author}).")
+                                print(f"WARNING: Intro message content not found for key '{intro_message_key}' (Persona key: {persona_key_for_display})")
+
+                            add_message("assistant", process_text_for_display(validated_response), avatar=avatar_char)
                         else:
-                            print(f"WARNING: No/empty/short response for output_key '{output_key_in_delta}' from agent '{agent_author}'. Text: '{response_text}'")
+                            print(f"WARNING: Could not map output_key '{output_key_in_delta}' to persona_key for UI display (Agent: {agent_author}).")
         
+        # 진행 상황 확인 및 처리
         if len(processed_sub_agent_outputs) >= expected_sub_agent_output_count:
             print(f"DEBUG: All {expected_sub_agent_output_count} expected outputs processed: {processed_sub_agent_outputs}.")
             workflow_completed = True
         else:
             print(f"WARNING: Workflow incomplete. Expected {expected_sub_agent_output_count}, processed {len(processed_sub_agent_outputs)}: {list(processed_sub_agent_outputs)}")
+            # 진행된 작업이 있으면 부분 결과로 처리
+            if len(processed_sub_agent_outputs) > 0:
+                await complete_with_partial_results()
 
         if any_response_processed_successfully or workflow_completed:
              st.session_state.need_rerun = True
@@ -161,7 +222,16 @@ async def _run_phase1_analysis(runner: Runner, session_id_string: str, content: 
         print(f"ERROR in _run_phase1_analysis: {str(e)}")
         import traceback
         traceback.print_exc()
-        st.session_state.need_rerun = True 
+        
+        # 에러 발생 시 부분 결과로 처리 시도
+        try:
+            partial_success = await complete_with_partial_results()
+            if partial_success:
+                print("Successfully completed with partial results after error.")
+            st.session_state.need_rerun = True
+        except Exception as nested_e:
+            print(f"ERROR while trying to complete with partial results: {str(nested_e)}")
+        
         return False
 
 # --- 여기가 메인 분석 실행 및 UI 업데이트 함수 ---
@@ -854,6 +924,61 @@ def handle_phase2_discussion():
         st.session_state.need_rerun = True
 
 def main():
+    # 세션 상태 초기화
+    initialize_session_state()
+    
+    # 로그 디렉토리 생성
+    if not os.path.exists("logs"):
+        os.makedirs("logs")
+    
+    # 모델 성능 정보 가져오기
+    model_recommendations = model_monitor.get_model_recommendations()
+    best_model_info = model_monitor.get_best_model()
+    
+    # 사이드바 UI 구성
+    with st.sidebar:
+        st.title("⚙️ 설정")
+        
+        # 모델 선택 UI
+        model_options = get_model_display_options()
+        selected_display_name = st.selectbox(
+            "모델 선택",
+            options=list(model_options.keys()),
+            index=list(model_options.values()).index(st.session_state.selected_model) if st.session_state.selected_model in model_options.values() else 0
+        )
+        
+        # 선택된 모델의 내부 ID 가져오기
+        selected_model_id = model_options[selected_display_name]
+        
+        # 모델 성능 정보 표시
+        if selected_model_id in model_recommendations:
+            recommendation = model_recommendations[selected_model_id]
+            recommendation_color = {
+                "highly_recommended": "green",
+                "recommended": "blue",
+                "not_recommended": "red",
+                "insufficient_data": "gray"
+            }.get(recommendation["recommendation"], "black")
+            
+            st.markdown(f"<span style='color:{recommendation_color}'>{recommendation['reason']}</span>", unsafe_allow_html=True)
+            
+            if recommendation["total_calls"] > 0:
+                st.progress(recommendation["success_rate"], f"성공률: {recommendation['success_rate']:.1%}")
+                st.text(f"평균 응답시간: {recommendation['avg_response_time']:.2f}초")
+        
+        # 최고 추천 모델 표시
+        if best_model_info and best_model_info[0] != selected_model_id:
+            best_model_name = MODEL_CONFIGS[ModelType(best_model_info[0])]["display_name"] if best_model_info[0] in [m.value for m in ModelType] else best_model_info[0]
+            st.info(f"💡 추천 모델: {best_model_name} (성공률: {best_model_info[1]['success_rate']:.1%})")
+        
+        # 모델 변경 적용
+        if st.session_state.selected_model != selected_model_id:
+            st.session_state.selected_model = selected_model_id
+            st.write(f"Model selection changed to: {selected_model_id}. Restarting session.")
+            restart_session()
+            st.rerun()
+    
+    # 나머지 main 함수 UI 코드는 그대로 유지
     initialize_session_state()
     
     # SessionManager 인스턴스 가져오기
@@ -862,27 +987,6 @@ def main():
     st.title("AIdea Lab - 아이디어 분석 워크숍")
     st.markdown("당신의 아이디어를 AI가 다양한 관점에서 분석해드립니다!")
     
-    # 모델 선택 UI
-    model_options = [model.value for model in ModelType]
-    default_model_value = st.session_state.get('selected_model', DEFAULT_MODEL.value)
-    try:
-        default_index = model_options.index(default_model_value)
-    except ValueError:
-        default_index = 0 # 기본값이 옵션에 없으면 첫번째 선택
-        st.session_state.selected_model = model_options[0] if model_options else DEFAULT_MODEL.value
-
-    selected_model_value_from_ui = st.selectbox(
-        "AI 모델 선택",
-        options=model_options,
-        index=default_index,
-        key="model_selector_widget"
-    )
-    if st.session_state.selected_model != selected_model_value_from_ui:
-        st.session_state.selected_model = selected_model_value_from_ui
-        print(f"Model selection changed to: {st.session_state.selected_model}. Restarting session.")
-        restart_session(keep_messages=False) # 모델 변경 시 메시지 초기화하고 rerun
-        # restart_session에서 need_rerun = True 설정되므로 여기서 추가 설정 불필요
-
     # 채팅 메시지 표시
     messages_container = st.container()
     with messages_container:

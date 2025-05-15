@@ -75,6 +75,78 @@ class AIdeaLabOrchestrator:
             sub_agents=[*self.agents, self.summary_agent]
         )
     
+    def create_intermediate_summarizer_agent(self, original_report_key: str, summary_output_key: str):
+        """
+        각 페르소나의 상세 보고서를 짧게 요약하는 중간 요약 에이전트를 생성합니다.
+        
+        Args:
+            original_report_key (str): 원본 보고서의 상태 키 (예: "marketer_report_phase1")
+            summary_output_key (str): 요약 결과를 저장할 상태 키 (예: "marketer_report_phase1_summary")
+            
+        Returns:
+            Agent: 중간 요약 에이전트 객체
+        """
+        # 모델별 컨텍스트 제한 설정
+        MODEL_CONTEXT_LIMITS = {
+            "gemini-2.5-flash-preview-04-17": 8000,  # 프리뷰 모델은 더 짧은 컨텍스트
+            "gemini-2.0-flash": 12000,
+            "gemini-2.5-pro-exp-03-25": 16000,
+            "gemini-2.5-pro-preview-05-06": 16000
+        }
+        
+        # 현재 모델의 컨텍스트 제한 (기본값: 8000)
+        current_model_limit = MODEL_CONTEXT_LIMITS.get(self.model_name, 8000)
+        
+        # config/prompts.py에서 중간 요약 프롬프트를 가져옵니다.
+        from config.prompts import INTERMEDIATE_SUMMARY_PROMPT
+        
+        # 개선된 요약 프롬프트 생성
+        improved_prompt = f"""
+당신은 아이디어 워크숍의 페르소나 보고서를 요약하는 전문가입니다.
+
+아래 텍스트는 워크숍 과정에서 특정 페르소나가 작성한 상세한 보고서입니다.
+이 보고서를 다른 AI 에이전트들이 활용할 수 있도록 간결하고 핵심적인 내용만 담아 요약해주세요.
+
+요약은 다음 형식을 반드시 준수해야 합니다:
+1. "**핵심 포인트:**" 제목 아래에 불릿 포인트로 5개 이내의 핵심 요점을 나열하세요.
+2. "**종합 요약:**" 제목 아래에 전체 내용을 2-3문장으로 요약하세요.
+
+요약의 총 길이는 반드시 300자 이내로 제한하세요.
+내용이 없거나 짧은 응답은 절대 반환하지 마세요.
+
+분석할 텍스트:
+{{state.{original_report_key}}}
+"""
+        
+        # 중간 요약 에이전트의 GenerationConfig 설정
+        generate_config = types.GenerationConfig(
+            temperature=0.1,  # 요약은 매우 명확하고 사실적이어야 하므로 낮은 온도 설정
+            max_output_tokens=1024,  # 요약은 비교적 짧으므로 적절한 토큰 수 설정
+            top_p=0.8,  # 더 결정적인 응답을 위해 조정
+            top_k=40,  # 더 결정적인 응답을 위해 조정
+            candidate_count=1,  # 단일 응답만 필요
+            stop_sequences=[]  # 특별한 중단 시퀀스 없음
+        )
+        
+        # 페르소나 이름 추출 (예: marketer_report_phase1 -> marketer)
+        persona_name = original_report_key.split("_")[0] if "_" in original_report_key else "unknown"
+        
+        # 중간 요약 에이전트 생성
+        intermediate_summary_agent = Agent(
+            name=f"{persona_name}_summary_agent",
+            model=self.model_name,
+            description=f"{persona_name.capitalize()} 페르소나의 상세 보고서 중간 요약 에이전트",
+            instruction=improved_prompt,
+            output_key=summary_output_key,
+            generate_content_config=generate_config
+        )
+        
+        # 디버깅 로그 출력
+        print(f"Created intermediate summary agent for {persona_name} with output_key: {summary_output_key}")
+        print(f"Using prompt: {improved_prompt[:100]}...")  # 프롬프트의 첫 100자만 로깅
+        
+        return intermediate_summary_agent
+    
     def get_workflow_agent(self):
         """워크플로우 에이전트(SequentialAgent) 반환"""
         return self.workflow_agent
@@ -120,11 +192,78 @@ class AIdeaLabOrchestrator:
             elif persona_type == PersonaType.ENGINEER:
                 phase1_agents.append(engineer_agent)
         
+        # 각 페르소나 에이전트 실행 후 중간 요약 에이전트 추가
+        # 마케터 중간 요약 에이전트
+        marketer_summary_agent = self.create_intermediate_summarizer_agent(
+            original_report_key="marketer_report_phase1",
+            summary_output_key="marketer_report_phase1_summary"
+        )
+        
+        # 비판적 분석가 중간 요약 에이전트
+        critic_summary_agent = self.create_intermediate_summarizer_agent(
+            original_report_key="critic_report_phase1",
+            summary_output_key="critic_report_phase1_summary"
+        )
+        
+        # 현실적 엔지니어 중간 요약 에이전트
+        engineer_summary_agent = self.create_intermediate_summarizer_agent(
+            original_report_key="engineer_report_phase1",
+            summary_output_key="engineer_report_phase1_summary"
+        )
+        
+        # 페르소나와 각각의 중간 요약 에이전트를 명확한 순서로 배치
+        # 명시적으로 순서를 지정하여 예측 가능한 워크플로우 생성
+        interleaved_agents = []
+        
+        # PERSONA_SEQUENCE 순서에 따라 페르소나와 해당 요약 에이전트를 순차적으로 추가
+        for persona_type in PERSONA_SEQUENCE:
+            if persona_type == PersonaType.MARKETER:
+                # 먼저 마케터 페르소나 에이전트 추가
+                interleaved_agents.append(marketer_agent)
+                print(f"Added marketer_agent to workflow at position {len(interleaved_agents)}")
+                # 그 다음 마케터 요약 에이전트 추가
+                interleaved_agents.append(marketer_summary_agent)
+                print(f"Added marketer_summary_agent to workflow at position {len(interleaved_agents)}")
+            elif persona_type == PersonaType.CRITIC:
+                # 먼저 비평가 페르소나 에이전트 추가
+                interleaved_agents.append(critic_agent)
+                print(f"Added critic_agent to workflow at position {len(interleaved_agents)}")
+                # 그 다음 비평가 요약 에이전트 추가
+                interleaved_agents.append(critic_summary_agent)
+                print(f"Added critic_summary_agent to workflow at position {len(interleaved_agents)}")
+            elif persona_type == PersonaType.ENGINEER:
+                # 먼저 엔지니어 페르소나 에이전트 추가
+                interleaved_agents.append(engineer_agent)
+                print(f"Added engineer_agent to workflow at position {len(interleaved_agents)}")
+                # 그 다음 엔지니어 요약 에이전트 추가
+                interleaved_agents.append(engineer_summary_agent)
+                print(f"Added engineer_summary_agent to workflow at position {len(interleaved_agents)}")
+        
+        # 워크플로우 에이전트 구성 로깅
+        print(f"Total agents in interleaved workflow: {len(interleaved_agents)}")
+        for i, agent in enumerate(interleaved_agents):
+            print(f"Workflow position {i+1}: {agent.name} with output_key: {agent.output_key}")
+        
         # 최종 요약 에이전트 (1단계용)
-        # 각 페르소나 에이전트의 output_key를 명시적으로 참조하는 수정된 프롬프트
+        # 각 페르소나 에이전트의 output_key와 중간 요약 output_key를 모두 참조하는 수정된 프롬프트
         summary_prompt = FINAL_SUMMARY_PROMPT.replace("{state.marketer_response}", "{state.marketer_report_phase1}")
         summary_prompt = summary_prompt.replace("{state.critic_response}", "{state.critic_report_phase1}")
         summary_prompt = summary_prompt.replace("{state.engineer_response}", "{state.engineer_report_phase1}")
+        
+        # 추가로 중간 요약 출력도 참조할 수 있도록 프롬프트 수정
+        summary_prompt += """
+        
+        각 페르소나의 보고서 요약:
+        
+        [마케터 요약]
+        {state.marketer_report_phase1_summary}
+        
+        [비판적 분석가 요약]
+        {state.critic_report_phase1_summary}
+        
+        [현실적 엔지니어 요약]
+        {state.engineer_report_phase1_summary}
+        """
         
         # 요약 에이전트의 GenerationConfig 생성
         summary_generate_config = types.GenerationConfig(
@@ -141,18 +280,20 @@ class AIdeaLabOrchestrator:
             generate_content_config=summary_generate_config  # 생성 설정 명시적으로 전달
         )
         
+        # 1단계 전용 워크플로우 에이전트 생성 - 중간 요약 에이전트를 포함하도록 수정
+        phase1_workflow_agent = SequentialAgent(
+            name="aidea_lab_phase1_workflow",
+            description="AIdea Lab 1단계 워크숍 시퀀스",
+            sub_agents=[*interleaved_agents, summary_agent_phase1]  # 페르소나와 중간요약이 번갈아가며 실행되는 에이전트 목록 사용
+        )
+        
         # 디버깅 로그 출력
         print(f"Created phase1 agents - Marketer output_key: {marketer_agent.output_key}")
         print(f"Created phase1 agents - Critic output_key: {critic_agent.output_key}")
         print(f"Created phase1 agents - Engineer output_key: {engineer_agent.output_key}")
         print(f"Created phase1 agents - Summary output_key: {summary_agent_phase1.output_key}")
-        
-        # 1단계 전용 워크플로우 에이전트 생성
-        phase1_workflow_agent = SequentialAgent(
-            name="aidea_lab_phase1_workflow",
-            description="AIdea Lab 1단계 워크숍 시퀀스",
-            sub_agents=[*phase1_agents, summary_agent_phase1]
-        )
+        print(f"Final workflow configuration: {len(phase1_workflow_agent.sub_agents)} agents in sequence")
+        print(f"Expected output keys: {self.get_output_keys_phase1().values()}")
         
         return phase1_workflow_agent
     
@@ -170,8 +311,11 @@ class AIdeaLabOrchestrator:
         """
         return {
             "marketer": "marketer_report_phase1",
+            "marketer_summary": "marketer_report_phase1_summary",  # 중간 요약 키 추가
             "critic": "critic_report_phase1",
+            "critic_summary": "critic_report_phase1_summary",  # 중간 요약 키 추가
             "engineer": "engineer_report_phase1",
+            "engineer_summary": "engineer_report_phase1_summary",  # 중간 요약 키 추가
             "summary_phase1": "summary_report_phase1"
         }
     

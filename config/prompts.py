@@ -131,8 +131,37 @@ DIALOGUE_SUMMARY_PROMPT = """
 """
 
 #######################################################
-# 기타 프롬프트 (고급 기능 확장용)
+# 중간 요약 프롬프트 (1단계 페르소나 보고서 요약용)
 #######################################################
+
+INTERMEDIATE_SUMMARY_PROMPT = """
+당신은 아이디어 워크숍의 페르소나 보고서를 요약하는 전문가입니다. 
+
+아래 텍스트는 워크숍 과정에서 특정 페르소나가 작성한 상세한 보고서입니다. 
+이 보고서를 다른 AI 에이전트가 효과적으로 활용할 수 있도록 핵심 내용만 간결하게 요약해주세요.
+
+### 중요: 이 요약은 반드시 생성되어야 합니다. 어떤 상황에서도 빈 응답을 반환하지 마세요.
+
+### 요약 지침:
+1. **핵심 논점 추출**: 원본 텍스트에서 가장 중요한 3-5개의 주장, 통찰, 제안, 또는 우려사항을 추출하세요.
+2. **구체성 유지**: 추상적인 표현이나 모호한 일반화를 피하고, 원본에 있는 구체적인 내용을 포함하세요.
+3. **사실 기반 요약**: 원본에 없는 내용이나 당신의 해석을 추가하지 마세요.
+4. **간결성**: 전체 요약은 300단어를 넘지 않도록 하세요.
+
+### 출력 형식:
+**핵심 포인트:**
+- [핵심 포인트 1]
+- [핵심 포인트 2]
+- [핵심 포인트 3]
+- [핵심 포인트 4] (필요시)
+- [핵심 포인트 5] (필요시)
+
+**종합 요약:**
+[핵심 내용을 1-2 문단으로 종합한 요약]
+
+### 요약할 텍스트:
+{text_to_summarize}
+"""
 
 # 다음 행동/페르소나 결정 지원 프롬프트 (MVP 이후 고급 기능)
 NEXT_ACTION_PROMPT = """
@@ -174,10 +203,13 @@ def FACILITATOR_PHASE2_PROMPT_PROVIDER(ctx):
     user_values = ctx.state.get("user_values", "")
     
     # 1단계 결과 가져오기
-    marketer_report = ctx.state.get("marketer_report_phase1", "아직 분석되지 않음")
-    critic_report = ctx.state.get("critic_report_phase1", "아직 분석되지 않음")
-    engineer_report = ctx.state.get("engineer_report_phase1", "아직 분석되지 않음")
-    summary_report = ctx.state.get("summary_report_phase1", "아직 요약되지 않음")
+    # 전체 요약을 우선 사용하고, 미세 조정을 위해 페르소나별 요약도 가져옴
+    summary_report_phase1 = ctx.state.get("summary_report_phase1", "아직 요약되지 않음")
+    
+    # 중간 요약본들 가져오기 (페르소나별 핵심 요약)
+    marketer_summary = ctx.state.get("marketer_report_phase1_summary", "")
+    critic_summary = ctx.state.get("critic_report_phase1_summary", "")
+    engineer_summary = ctx.state.get("engineer_report_phase1_summary", "")
     
     # 토론 히스토리 가져오기 (없으면 빈 리스트)
     discussion_history = ctx.state.get("discussion_history_phase2", [])
@@ -211,9 +243,43 @@ def FACILITATOR_PHASE2_PROMPT_PROVIDER(ctx):
 
 **사용자 중요 가치**: {user_values}
 
-**1단계 분석 결과 요약**:
-{summary_report}
+"""
 
+    # 1단계 분석 결과를 효율적으로 프롬프트에 포함
+    # 전체 요약 보고서가 있으면 그것만 사용 (가장 간결하면서도 전체 맥락 제공)
+    if summary_report_phase1 and summary_report_phase1 != "아직 요약되지 않음":
+        prompt += f"""
+### 1단계 분석 결과 요약:
+{summary_report_phase1}
+"""
+    # 전체 요약 보고서가 없거나 불충분하다면, 페르소나별 중간 요약을 간결하게 포함
+    elif marketer_summary or critic_summary or engineer_summary:
+        prompt += f"""
+### 1단계 분석 결과 주요 관점:
+
+"""
+        # 페르소나별 요약이 있는 경우에만 추가
+        if marketer_summary:
+            prompt += f"""
+**마케터 관점**: {marketer_summary[:300]}...
+"""
+        if critic_summary:
+            prompt += f"""
+**비평가 관점**: {critic_summary[:300]}...
+"""
+        if engineer_summary:
+            prompt += f"""
+**엔지니어 관점**: {engineer_summary[:300]}...
+"""
+    # 요약 정보가 전혀 없는 경우 (비상 상황)
+    else:
+        prompt += f"""
+### 1단계 분석 결과:
+1단계 분석 결과가 아직 없거나 요약되지 않았습니다. 초기 아이디어를 바탕으로 토론을 시작하세요.
+"""
+
+    # 나머지 토론 내용 추가
+    prompt += f"""
 ### 최근 토론 내용:
 {discussion_history_str if discussion_history_str else "아직 토론이 시작되지 않았습니다."}
 

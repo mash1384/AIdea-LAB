@@ -37,8 +37,235 @@ st.set_page_config(
 APP_NAME = "AIdea Lab"
 USER_ID = "streamlit_user"
 
-# 세션 관리자 초기화 (제거: 더 이상 전역 변수로 사용하지 않음)
-# session_manager = SessionManager(APP_NAME, USER_ID)
+# 애플리케이션 상태 관리를 위한 클래스
+class AppStateManager:
+    """
+    애플리케이션 상태를 관리하는 클래스
+    Streamlit의 session_state를 캡슐화하여 상태 접근과 변경을 일관되게 처리합니다.
+    """
+    
+    @staticmethod
+    def initialize_session_state():
+        """세션 상태 초기화"""
+        # SessionManager 객체 초기화
+        if 'session_manager_instance' not in st.session_state:
+            print("Creating new SessionManager instance and storing in st.session_state")
+            st.session_state.session_manager_instance = SessionManager(APP_NAME, USER_ID)
+        
+        # 기본 상태 변수 초기화
+        default_states = {
+            'session_counter': 0,
+            'selected_model': DEFAULT_MODEL.value,
+            'messages': [],
+            'current_idea': "",
+            'analyzed_idea': "",
+            'analysis_phase': "idle",
+            'adk_session_id': None,
+            'user_goal': "",
+            'user_constraints': "",
+            'user_values': "",
+            'show_additional_info': False,
+            'expander_state': False,
+            'proceed_to_phase2': False,
+            'awaiting_user_input_phase2': False,
+            'phase2_user_prompt': "",
+            'phase2_discussion_complete': False,
+            'phase2_summary_complete': False
+        }
+        
+        # 없는 상태만 초기화
+        for key, value in default_states.items():
+            if key not in st.session_state:
+                st.session_state[key] = value
+        
+        # 웰컴 메시지 추가 (messages 배열이 비어있을 때만)
+        if not st.session_state.messages:
+            try:
+                welcome_message = SYSTEM_MESSAGES.get("welcome")
+                AppStateManager.add_message("assistant", welcome_message, avatar="🧠")
+            except Exception as e:
+                print(f"Error adding welcome message: {str(e)}")
+                AppStateManager.add_message("assistant", "AIdea Lab에 오신 것을 환영합니다.", avatar="🧠")
+    
+    @staticmethod
+    def restart_session(keep_messages=False):
+        """세션 재시작"""
+        print("Restarting session...")
+        
+        # 현재 메시지 백업 (keep_messages가 True일 경우 사용)
+        messages_backup = list(st.session_state.get("messages", [])) 
+        
+        # 재설정할 상태 키 목록
+        keys_to_reset = [
+            'current_idea', 'analyzed_idea', 'analysis_phase', 
+            'adk_session_id', 'user_goal', 'user_constraints', 'user_values',
+            'proceed_to_phase2', 'awaiting_user_input_phase2', 'phase2_user_prompt',
+            'phase2_discussion_complete', 'phase2_summary_complete'
+        ]
+        
+        # 상태 재설정
+        for key in keys_to_reset:
+            if key in st.session_state:
+                del st.session_state[key]
+        
+        # 기본 상태 재초기화
+        AppStateManager.initialize_session_state()
+        
+        # 메시지 처리
+        if keep_messages:
+            st.session_state.messages = messages_backup
+        else:
+            st.session_state.messages = []
+            try:
+                welcome_message = SYSTEM_MESSAGES.get("welcome")
+                AppStateManager.add_message("assistant", welcome_message, avatar="🧠")
+            except Exception as e:
+                print(f"Error re-adding welcome message: {str(e)}")
+                AppStateManager.add_message("assistant", "AIdea Lab에 오신 것을 환영합니다.", avatar="🧠")
+        
+        print("Session restart completed")
+        st.rerun()  # 세션 재시작 후 UI 갱신
+    
+    @staticmethod
+    def add_message(role, content, avatar=None):
+        """메시지 추가"""
+        if content is None:
+            print(f"Skipping add_message for role {role} because content is None.")
+            return
+        
+        print(f"Adding message - Role: {role}, Avatar: {avatar}, Content preview: {str(content)[:70]}...")
+        
+        # 메시지 객체 생성
+        message_obj = {"role": role, "content": content, "avatar": avatar}
+        
+        # 현재 메시지 목록 가져오기
+        if 'messages' not in st.session_state:
+            st.session_state.messages = []
+        
+        # 연속 중복 시스템 메시지 방지
+        is_system_message_type = avatar == "ℹ️"
+        if is_system_message_type and st.session_state.messages:
+            last_message = st.session_state.messages[-1]
+            if (last_message.get("role") == role and 
+                last_message.get("content") == content and 
+                last_message.get("avatar") == avatar):
+                print("Consecutive duplicate system message skipped.")
+                return
+        
+        # 메시지 추가
+        st.session_state.messages.append(message_obj)
+        print(f"Message added. Total messages: {len(st.session_state.messages)}")
+    
+    @staticmethod
+    def show_system_message(message_key):
+        """시스템 메시지 표시"""
+        message_content = SYSTEM_MESSAGES.get(message_key)
+        if message_content:
+            print(f"Showing system message for key '{message_key}': {message_content[:70]}...")
+            AppStateManager.add_message("system", message_content, avatar="ℹ️")
+        else:
+            print(f"WARNING: System message key '{message_key}' not defined in SYSTEM_MESSAGES.")
+    
+    @staticmethod
+    def get_state(key, default=None):
+        """상태 값 가져오기"""
+        return st.session_state.get(key, default)
+    
+    @staticmethod
+    def set_state(key, value):
+        """상태 값 설정"""
+        st.session_state[key] = value
+    
+    @staticmethod
+    def change_analysis_phase(new_phase):
+        """분석 단계 변경"""
+        print(f"Changing analysis phase from '{st.session_state.get('analysis_phase', 'unknown')}' to '{new_phase}'")
+        st.session_state.analysis_phase = new_phase
+    
+    @staticmethod
+    def process_text_for_display(text_data):
+        """텍스트 표시용 처리"""
+        if not isinstance(text_data, str):
+            text_data = str(text_data)
+        return text_data.replace("\n", "  \n")
+    
+    @staticmethod
+    def toggle_additional_info():
+        """추가 정보 표시 토글"""
+        show_info = st.session_state.get("show_additional_info", False)
+        st.session_state.show_additional_info = not show_info
+        if not show_info:  # False에서 True로 변경될 때만 expander 펼치기
+            st.session_state.expander_state = True
+        st.rerun()
+    
+    @staticmethod
+    def save_additional_info():
+        """추가 정보 저장"""
+        st.session_state.user_goal = st.session_state.user_goal_input
+        st.session_state.user_constraints = st.session_state.user_constraints_input
+        st.session_state.user_values = st.session_state.user_values_input
+        st.session_state.expander_state = False
+        st.session_state.show_additional_info = False
+        st.rerun()
+    
+    @staticmethod
+    def submit_idea(idea_text):
+        """아이디어 제출"""
+        if not idea_text:
+            return
+            
+        # 상세정보가 입력되지 않았다면 확장 표시
+        if not st.session_state.get("user_goal"):
+            st.session_state.show_additional_info = True
+            st.session_state.expander_state = True
+        
+        AppStateManager.add_message("user", idea_text)
+        st.session_state.current_idea = idea_text
+        AppStateManager.change_analysis_phase("phase1_pending_start")
+        st.rerun()
+    
+    @staticmethod
+    def start_phase2_discussion():
+        """2단계 토론 시작"""
+        AppStateManager.change_analysis_phase("phase2_pending_start")
+        st.session_state.proceed_to_phase2 = True
+        print("User selected to start Phase 2 discussion.")
+        st.rerun()
+    
+    @staticmethod
+    def submit_phase2_response(response_text):
+        """2단계 사용자 응답 제출"""
+        if not response_text:
+            return
+            
+        AppStateManager.add_message("user", response_text)
+        st.session_state.phase2_user_response = response_text
+        AppStateManager.change_analysis_phase("phase2_running")
+        st.rerun()
+    
+    @staticmethod
+    def retry_analysis():
+        """동일 아이디어로 분석 재시도"""
+        st.session_state.analysis_phase = "phase1_pending_start"
+        st.session_state.analyzed_idea = ""
+        st.rerun()
+    
+    @staticmethod
+    def retry_phase2():
+        """2단계 토론 재시도"""
+        AppStateManager.change_analysis_phase("phase2_pending_start")
+        st.session_state.awaiting_user_input_phase2 = False
+        st.session_state.phase2_discussion_complete = False
+        st.session_state.phase2_summary_complete = False
+        st.rerun()
+    
+    @staticmethod
+    def change_model(new_model_id):
+        """모델 변경"""
+        if st.session_state.selected_model != new_model_id:
+            st.session_state.selected_model = new_model_id
+            print(f"Model selection changed to: {new_model_id}")
+            AppStateManager.restart_session()
 
 # 시스템 안내 메시지 템플릿 정의
 SYSTEM_MESSAGES = {
@@ -92,10 +319,23 @@ model_monitor = AIModelMonitor(log_file_path="logs/model_performance.json")
 # monitor_model_performance 데코레이터 적용 (기존 함수 앞에 추가)
 @monitor_model_performance(model_monitor)
 async def _run_phase1_analysis(runner: Runner, session_id_string: str, content: types.Content, orchestrator: AIdeaLabOrchestrator):
+    """
+    1단계 분석을 실행하는 비동기 함수
+    
+    Args:
+        runner: ADK Runner 인스턴스
+        session_id_string: 세션 ID
+        content: 입력 콘텐츠
+        orchestrator: 오케스트레이터 인스턴스
+    
+    Returns:
+        tuple: (성공 여부, 처리된 결과 키 목록)
+    """
     print(f"DEBUG: _run_phase1_analysis - Starting with session_id: {session_id_string}")
     
     workflow_completed = False
     any_response_processed_successfully = False
+    processed_sub_agent_outputs = set()
     
     # 응답 검증 및 대체 메커니즘 함수
     def validate_agent_response(response_text, agent_name, output_key):
@@ -153,44 +393,48 @@ async def _run_phase1_analysis(runner: Runner, session_id_string: str, content: 
             
         return response_text
     
-    # 부분 결과로 프로세스 완료하는 함수
-    async def complete_with_partial_results():
-        session = orchestrator.session_manager_instance.get_session(session_id_string)
-        if not session:
-            return False
-            
-        # 현재까지 수집된 응답 확인
-        state = session.state
-        processed_keys = [k for k in state.keys() if k.endswith("_phase1") or k.endswith("_phase1_summary")]
+    # 결과 저장 및 UI 메시지 생성 함수
+    def process_response(output_key, response_text, agent_name, session_manager):
+        # 응답 검증 및 필요 시 대체 응답 생성
+        validated_response = validate_agent_response(response_text, agent_name, output_key)
         
-        if not processed_keys:
-            return False
-            
-        # 최종 요약이 없는 경우 간단한 요약 생성
-        if "summary_report_phase1" not in state or not state["summary_report_phase1"]:
-            # 부분 결과를 바탕으로 간단한 요약 메시지 생성
-            message = "## 아이디어 분석 요약\n\n"
-            message += "일부 페르소나의 분석이 완료되었습니다. 분석 과정에서 일부 오류가 발생했지만, 제공된 정보를 바탕으로 요약합니다.\n\n"
-            
-            for key in processed_keys:
-                if state.get(key) and not key.endswith("_summary"):
-                    persona_name = key.split("_")[0].capitalize()
-                    message += f"### {persona_name} 분석\n"
-                    message += state[key][:300] + "...\n\n"
-                    
-            add_message("system", "**📝 부분 결과 기반 요약:**", avatar="ℹ️")
-            add_message("assistant", process_text_for_display(message), avatar="📝")
-            
-        return True
+        # 응답이 변경되었으면 세션 상태 업데이트
+        if validated_response != response_text:
+            try:
+                session = session_manager.get_session(session_id_string)
+                if session:
+                    event_actions = EventActions(
+                        state_delta={output_key: validated_response}
+                    )
+                    new_event = Event(
+                        actions=event_actions,
+                        author=f"{agent_name}_fallback"
+                    )
+                    session_manager.session_service.append_event(
+                        session=session,
+                        event=new_event
+                    )
+                    print(f"INFO: Successfully updated session with fallback response for {output_key}")
+            except Exception as e:
+                print(f"ERROR: Failed to update session with fallback response: {e}")
+        
+        # 결과 및 UI 메시지 반환
+        return {
+            "output_key": output_key,
+            "response": validated_response,
+            "agent_name": agent_name
+        }
     
     try:
         output_keys_map = orchestrator.get_output_keys_phase1() 
         output_key_to_persona_key_map = {v: k for k, v in output_keys_map.items()}
 
-        processed_sub_agent_outputs = set() 
         expected_sub_agent_output_count = len(output_keys_map)
         print(f"DEBUG: Expected sub-agent output count: {expected_sub_agent_output_count}")
         print(f"DEBUG: Output keys to track from orchestrator: {output_keys_map}")
+
+        # 결과를 저장할 리스트
+        processed_results = []
 
         event_stream = runner.run_async(
             user_id=USER_ID, 
@@ -217,57 +461,19 @@ async def _run_phase1_analysis(runner: Runner, session_id_string: str, content: 
                         if "report_phase1_summary" in output_key_in_delta:
                             print(f"DEBUG_LLM_RAW_RESPONSE: Agent '{agent_author}', OutputKey: '{output_key_in_delta}', RawResponse: '{response_text}'")
                         
-                        # 응답 검증 및 필요 시 대체 응답 생성
-                        validated_response = validate_agent_response(response_text, agent_author, output_key_in_delta)
-                        
-                        if validated_response != response_text:
-                            # 대체 응답이 생성되었으면 세션 상태 업데이트
-                            try:
-                                session = st.session_state.session_manager_instance.get_session(session_id_string)
-                                if session:
-                                    event_actions = EventActions(
-                                        state_delta={output_key_in_delta: validated_response}
-                                    )
-                                    new_event = Event(
-                                        actions=event_actions,
-                                        author=f"{agent_author}_fallback"
-                                    )
-                                    try:
-                                        # 수정된 부분: 불필요한 키워드 인자 제거하고 session 객체 전달
-                                        st.session_state.session_manager_instance.session_service.append_event(
-                                            session=session,
-                                            event=new_event
-                                        )
-                                        print(f"INFO: Successfully updated session with fallback response for {output_key_in_delta}")
-                                    except Exception as e:
-                                        print(f"ERROR: Failed to update session with fallback response: {e}")
-                            except Exception as e:
-                                print(f"ERROR: Session retrieval or event creation failed: {e}")
-                        
                         print(f"DEBUG: Valid response text found for output_key '{output_key_in_delta}' from agent '{agent_author}'.")
                         
+                        # 응답 처리 및 결과 저장
+                        result = process_response(
+                            output_key_in_delta, 
+                            response_text, 
+                            agent_author,
+                            st.session_state.session_manager_instance
+                        )
+                        
+                        processed_results.append(result)
                         processed_sub_agent_outputs.add(output_key_in_delta)
                         any_response_processed_successfully = True
-
-                        persona_key_for_display = output_key_to_persona_key_map.get(output_key_in_delta)
-                        
-                        if persona_key_for_display:
-                            intro_message_key_base = persona_key_for_display
-                            intro_message_key = f"{intro_message_key_base}_intro" 
-                            intro_content = SYSTEM_MESSAGES.get(intro_message_key)
-                            avatar_char = persona_avatars.get(intro_message_key_base, "🤖")
-
-                            if intro_content:
-                                add_message("system", intro_content, avatar="ℹ️")
-                                print(f"INFO: Adding intro message with key '{intro_message_key}' for persona '{persona_key_for_display}'")
-                            else:
-                                print(f"WARNING: Intro message content not found for key '{intro_message_key}' (Persona key: {persona_key_for_display})")
-
-                            # 로그 추가: 어떤 아바타가 사용되는지 확인
-                            print(f"INFO: Using avatar '{avatar_char}' for persona '{persona_key_for_display}'")
-                            add_message("assistant", process_text_for_display(validated_response), avatar=avatar_char)
-                        else:
-                            print(f"WARNING: Could not map output_key '{output_key_in_delta}' to persona_key for UI display (Agent: {agent_author}).")
         
         # 진행 상황 확인 및 처리
         if len(processed_sub_agent_outputs) >= expected_sub_agent_output_count:
@@ -275,49 +481,40 @@ async def _run_phase1_analysis(runner: Runner, session_id_string: str, content: 
             workflow_completed = True
         else:
             print(f"WARNING: Workflow incomplete. Expected {expected_sub_agent_output_count}, processed {len(processed_sub_agent_outputs)}: {list(processed_sub_agent_outputs)}")
-            # 진행된 작업이 있으면 부분 결과로 처리
-            if len(processed_sub_agent_outputs) > 0:
-                await complete_with_partial_results()
-
-        if any_response_processed_successfully or workflow_completed:
-             st.session_state.need_rerun = True
 
         print(f"DEBUG: _run_phase1_analysis - Finished. WorkflowCompleted={workflow_completed}, AnyResponseProcessed={any_response_processed_successfully}")
-        return workflow_completed and any_response_processed_successfully
+        return (workflow_completed and any_response_processed_successfully, processed_results, processed_sub_agent_outputs)
 
     except Exception as e:
         print(f"ERROR in _run_phase1_analysis: {str(e)}")
         import traceback
         traceback.print_exc()
-        
-        # 에러 발생 시 부분 결과로 처리 시도
-        try:
-            partial_success = await complete_with_partial_results()
-            if partial_success:
-                print("Successfully completed with partial results after error.")
-            st.session_state.need_rerun = True
-        except Exception as nested_e:
-            print(f"ERROR while trying to complete with partial results: {str(nested_e)}")
-        
-        return False
+        return (False, [], processed_sub_agent_outputs)
 
-# --- 여기가 메인 분석 실행 및 UI 업데이트 함수 ---
+
 def run_phase1_analysis_and_update_ui():
+    """
+    1단계 분석을 실행하고 UI를 업데이트하는 함수
+    
+    이 함수는 비동기 분석 작업을 호출하고, 결과를 UI에 반영합니다.
+    """
     try:
         orchestrator = AIdeaLabOrchestrator(model_name=st.session_state.selected_model)
         print(f"Created local orchestrator with model: {st.session_state.selected_model}")
         
-        st.session_state.analysis_phase = "phase1_running"
-
-        show_system_message("phase1_start")
+        # 분석 상태 업데이트
+        AppStateManager.change_analysis_phase("phase1_running")
+        AppStateManager.show_system_message("phase1_start")
         print("Phase 1 analysis initiated by user")
         
+        # 사용자 입력 데이터 가져오기
         idea_text = st.session_state.current_idea
         user_goal = st.session_state.get("user_goal", "")
         user_constraints = st.session_state.get("user_constraints", "")
         user_values = st.session_state.get("user_values", "")
         print(f"Analyzing idea: {idea_text}, Goal: {user_goal}, Constraints: {user_constraints}, Values: {user_values}")
         
+        # 새 세션 시작
         session_object, session_id_string = st.session_state.session_manager_instance.start_new_idea_session(
             idea_text,
             user_goal=user_goal,
@@ -327,17 +524,19 @@ def run_phase1_analysis_and_update_ui():
         
         if not session_object or not session_id_string:
             print("ERROR: Failed to start new idea session in SessionManager.")
-            st.session_state.analysis_phase = "phase1_error"
-            show_system_message("phase1_error")
-            st.session_state.need_rerun = True
+            AppStateManager.change_analysis_phase("phase1_error")
+            AppStateManager.show_system_message("phase1_error")
+            st.rerun()
             return
 
         st.session_state.adk_session_id = session_id_string
         print(f"New session started with ID: {session_id_string}, initial state verified in SessionManager.")
         
+        # 1단계 워크플로우 에이전트 가져오기
         phase1_workflow_agent = orchestrator.get_phase1_workflow()
         print(f"Successfully retrieved phase1_workflow_agent: {phase1_workflow_agent.name if hasattr(phase1_workflow_agent, 'name') else 'N/A'}")
 
+        # Runner 초기화
         runner = Runner(
             agent=phase1_workflow_agent,
             app_name=APP_NAME,
@@ -345,6 +544,7 @@ def run_phase1_analysis_and_update_ui():
         )
         print(f"Successfully initialized ADK Runner with agent: {phase1_workflow_agent.name if hasattr(phase1_workflow_agent, 'name') else 'N/A'}")
         
+        # 입력 내용 준비
         content_parts = [types.Part(text=f"아이디어: {idea_text}")]
         if user_goal: content_parts.append(types.Part(text=f"\n목표: {user_goal}"))
         if user_constraints: content_parts.append(types.Part(text=f"\n제약조건: {user_constraints}"))
@@ -353,38 +553,65 @@ def run_phase1_analysis_and_update_ui():
         input_content_for_runner = types.Content(role="user", parts=content_parts)
         print(f"Prepared input_content_for_runner: {input_content_for_runner}")
         
-        analysis_success = asyncio.run(_run_phase1_analysis(
+        # 분석 실행
+        analysis_success, processed_results, processed_outputs = asyncio.run(_run_phase1_analysis(
             runner, 
             session_id_string, 
             input_content_for_runner, 
             orchestrator
         ))
         
+        # UI에 결과 표시
+        if processed_results:
+            output_keys_map = orchestrator.get_output_keys_phase1()
+            output_key_to_persona_key_map = {v: k for k, v in output_keys_map.items()}
+            
+            # 결과를 UI에 추가
+            for result in processed_results:
+                output_key = result["output_key"]
+                response = result["response"]
+                
+                persona_key_for_display = output_key_to_persona_key_map.get(output_key)
+                
+                if persona_key_for_display:
+                    # 페르소나 소개 메시지 표시
+                    intro_message_key_base = persona_key_for_display
+                    intro_message_key = f"{intro_message_key_base}_intro"
+                    intro_content = SYSTEM_MESSAGES.get(intro_message_key)
+                    avatar_char = persona_avatars.get(intro_message_key_base, "🤖")
+                    
+                    if intro_content:
+                        AppStateManager.add_message("system", intro_content, avatar="ℹ️")
+                        print(f"INFO: Adding intro message with key '{intro_message_key}' for persona '{persona_key_for_display}'")
+                    else:
+                        print(f"WARNING: Intro message content not found for key '{intro_message_key}' (Persona key: {persona_key_for_display})")
+                    
+                    # 페르소나 응답 표시
+                    print(f"INFO: Using avatar '{avatar_char}' for persona '{persona_key_for_display}'")
+                    AppStateManager.add_message("assistant", AppStateManager.process_text_for_display(response), avatar=avatar_char)
+                else:
+                    print(f"WARNING: Could not map output_key '{output_key}' to persona_key for UI display.")
+        
+        # 분석 완료 상태 업데이트
         if analysis_success:
-            print("Phase 1 analysis processing was successful according to _run_phase1_analysis.")
-            show_system_message("phase1_complete") # 개별 메시지는 _run_phase1_analysis에서 추가, 여기선 완료 메시지만.
-            st.session_state.analysis_phase = "phase1_complete"
+            print("Phase 1 analysis processing was successful.")
+            AppStateManager.show_system_message("phase1_complete")
+            AppStateManager.change_analysis_phase("phase1_complete")
         else:
-            print("Phase 1 analysis processing FAILED according to _run_phase1_analysis.")
-            # _run_phase1_analysis 내부에서 이미 에러 로그를 찍었을 것이므로, 여기서는 UI 상태만 업데이트
-            current_phase = st.session_state.get("analysis_phase", "")
-            if current_phase != "phase1_error": 
-                show_system_message("phase1_error")
-                st.session_state.analysis_phase = "phase1_error"
+            print("Phase 1 analysis processing FAILED.")
+            AppStateManager.change_analysis_phase("phase1_error")
+            AppStateManager.show_system_message("phase1_error")
         
         st.session_state.analyzed_idea = idea_text
-
+        st.rerun()  # UI 갱신
+        
     except Exception as e:
         print(f"Critical error in run_phase1_analysis_and_update_ui: {str(e)}")
         import traceback
         traceback.print_exc()
-        st.session_state.analysis_phase = "phase1_error"
-        show_system_message("phase1_error")
-    
-    finally:
-        st.session_state.need_rerun = True 
-        print(f"run_phase1_analysis_and_update_ui finished. Phase: {st.session_state.get('analysis_phase', 'unknown')}, NeedRerun: {st.session_state.get('need_rerun', False)}")
-
+        AppStateManager.change_analysis_phase("phase1_error")
+        AppStateManager.show_system_message("phase1_error")
+        st.rerun()  # UI 갱신
 
 def initialize_session_state():
     # SessionManager 객체를 Streamlit 세션 상태에 저장
@@ -403,10 +630,10 @@ def initialize_session_state():
         st.session_state.messages = []
         try:
             welcome_message = SYSTEM_MESSAGES.get("welcome")
-            add_message("assistant", welcome_message, avatar="🧠") # 아바타 일관성
+            AppStateManager.add_message("assistant", welcome_message, avatar="🧠") # 아바타 일관성
         except Exception as e:
             print(f"Error adding welcome message: {str(e)}")
-            add_message("assistant", "AIdea Lab에 오신 것을 환영합니다.", avatar="🧠")
+            AppStateManager.add_message("assistant", "AIdea Lab에 오신 것을 환영합니다.", avatar="🧠")
     
     # 나머지 상태 초기화는 이전과 거의 동일하게 유지, .get으로 안전하게 접근
     if 'current_idea' not in st.session_state: st.session_state.current_idea = ""
@@ -418,19 +645,10 @@ def initialize_session_state():
     if 'user_values' not in st.session_state: st.session_state.user_values = ""
     if 'show_additional_info' not in st.session_state: st.session_state.show_additional_info = False
     if 'expander_state' not in st.session_state: st.session_state.expander_state = False # 기본적으로 닫혀있도록 변경 (선택)
-    if 'need_rerun' not in st.session_state: st.session_state.need_rerun = False
-    if 'proceed_to_phase2' not in st.session_state: st.session_state.proceed_to_phase2 = False
-    
-    # 2단계 토론 관련 상태 변수 추가
-    if 'awaiting_user_input_phase2' not in st.session_state: st.session_state.awaiting_user_input_phase2 = False
-    if 'phase2_user_prompt' not in st.session_state: st.session_state.phase2_user_prompt = ""
-    if 'phase2_discussion_complete' not in st.session_state: st.session_state.phase2_discussion_complete = False
-    if 'phase2_summary_complete' not in st.session_state: st.session_state.phase2_summary_complete = False
 
 
 def update_setting(key, value): # 현재 직접 사용되지 않지만 유틸리티로 유지
     setattr(st.session_state, key, value)
-    st.session_state.need_rerun = True
 
 def restart_session(keep_messages=False):
     print("Restarting session...")
@@ -458,13 +676,12 @@ def restart_session(keep_messages=False):
         st.session_state.messages = [] 
         try:
             welcome_message = SYSTEM_MESSAGES.get("welcome")
-            add_message("assistant", welcome_message, avatar="🧠")
+            AppStateManager.add_message("assistant", welcome_message, avatar="🧠")
         except Exception as e:
             print(f"Error re-adding welcome message: {str(e)}")
-            add_message("assistant", "AIdea Lab에 오신 것을 환영합니다.", avatar="🧠")
+            AppStateManager.add_message("assistant", "AIdea Lab에 오신 것을 환영합니다.", avatar="🧠")
     
     print("Session restart logic completed.")
-    st.session_state.need_rerun = True
 
 
 def process_text_for_display(text_data):
@@ -502,17 +719,20 @@ def add_message(role, content, avatar=None):
     st.session_state.messages.append(message_obj)
     print(f"Message added. Total messages: {len(st.session_state.messages)}")
 
-def show_system_message(message_key, rerun_immediately=False):
+def show_system_message(message_key):
+    """
+    시스템 메시지 표시 (이전 방식, 제거 예정)
+    
+    AppStateManager.show_system_message()를 사용하도록 수정 중입니다.
+    """
     message_content = SYSTEM_MESSAGES.get(message_key)
     if message_content:
         print(f"Showing system message for key '{message_key}': {message_content[:70]}...")
-        add_message("system", message_content, avatar="ℹ️")
-        if rerun_immediately:
-            st.session_state.need_rerun = True
+        AppStateManager.add_message("system", message_content, avatar="ℹ️")
     else:
         print(f"WARNING: System message key '{message_key}' not defined in SYSTEM_MESSAGES.")
 
-# 토론 히스토리 상태 업데이트를 위한 유틸리티 함수 (전역 함수로 이동)
+# 토론 히스토리 상태 업데이트를 위한 유틸리티 함수
 def update_discussion_history(session_id_string, speaker, text):
     """
     토론 히스토리를 안정적으로 업데이트하는 유틸리티 함수
@@ -552,19 +772,19 @@ def update_discussion_history(session_id_string, speaker, text):
     
     print(f"DEBUG: Updated discussion_history_phase2 with {speaker}'s message. Total entries: {len(discussion_history)}")
 
-# --- 2단계 토론 실행 및 UI 업데이트 함수 ---
+
 async def _run_phase2_discussion(session_id_string, orchestrator):
     """
     2단계 토론 실행 함수
     
-    토론 퍼실리테이터 및 페르소나 에이전트들 간의 대화를 조율하고 UI에 표시합니다.
+    토론 퍼실리테이터 및 페르소나 에이전트들 간의 대화를 조율하고 결과를 반환합니다.
     
     Args:
         session_id_string (str): 세션 ID
         orchestrator (AIdeaLabOrchestrator): 오케스트레이터 객체
     
     Returns:
-        bool: 토론 진행 성공 여부
+        tuple: (토론 진행 성공 여부, 토론 결과 목록)
     """
     print(f"DEBUG: _run_phase2_discussion - Starting with session_id: {session_id_string}")
     
@@ -572,7 +792,7 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
         session = st.session_state.session_manager_instance.get_session(session_id_string)
         if not session:
             print(f"ERROR: Failed to get session with ID {session_id_string} in _run_phase2_discussion.")
-            return False
+            return False, []
 
         # 각 에이전트의 응답을 표시할 때 사용할 아바타 매핑
         agent_to_avatar_map = {
@@ -587,12 +807,33 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
             "engineer_summary": persona_avatars.get("engineer_summary", "📄")
         }
         
+        # 토론 결과를 저장할 리스트
+        discussion_results = []
+        
         # 토론 퍼실리테이터 에이전트 가져오기
         facilitator_agent = orchestrator.get_phase2_discussion_facilitator()
         
         # 최대 토론 반복 횟수
         max_discussion_rounds = 15
         current_round = 0
+        
+        # 사용자 입력 대기 상태 확인
+        if st.session_state.awaiting_user_input_phase2:
+            # 사용자 입력이 있은 경우, 토론 히스토리에 추가
+            user_response = st.session_state.get("phase2_user_response", "")
+            if user_response:
+                update_discussion_history(session_id_string, "user", user_response)
+                
+                # 사용자 입력 대기 상태 초기화
+                st.session_state.awaiting_user_input_phase2 = False
+                st.session_state.phase2_user_prompt = ""
+                
+                # 결과에 사용자 응답 추가
+                discussion_results.append({
+                    "type": "user_response",
+                    "content": user_response,
+                    "avatar": agent_to_avatar_map["user"]
+                })
         
         # 토론 루프 시작
         while current_round <= max_discussion_rounds:
@@ -601,7 +842,6 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
             
             try:
                 # 퍼실리테이터 에이전트 실행
-                # 빈 메시지로 실행하여 세션 상태를 직접 참조하도록 함
                 runner = Runner(
                     agent=facilitator_agent,
                     app_name=APP_NAME,
@@ -620,6 +860,8 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                     new_message=input_content
                 )
                 
+                facilitator_response = None
+                
                 async for event in event_stream:
                     is_final_event = event.is_final_response() if hasattr(event, 'is_final_response') else False
                     event_actions = getattr(event, 'actions', None)
@@ -632,25 +874,27 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                             # 응답 전체를 로그로 출력 (디버깅용)
                             print(f"\n=== FACILITATOR RESPONSE (FULL) ===\n{facilitator_response}\n=== END FACILITATOR RESPONSE ===\n")
                             
-                            # 퍼실리테이터 응답을 UI에 표시
-                            show_system_message("facilitator_intro", rerun_immediately=False)
-                            add_message("assistant", process_text_for_display(facilitator_response), avatar=agent_to_avatar_map["facilitator"])
+                            # 토론 히스토리에 퍼실리테이터 발언 추가
+                            update_discussion_history(session_id_string, "facilitator", facilitator_response)
+                            
+                            # 결과에 퍼실리테이터 응답 추가
+                            discussion_results.append({
+                                "type": "facilitator_response",
+                                "content": facilitator_response,
+                                "avatar": agent_to_avatar_map["facilitator"],
+                                "intro_key": "facilitator_intro"
+                            })
                             
                             # facilitator_response에서 JSON 부분 추출
                             import re
                             import json
                             
                             # 더 정확한 JSON 추출을 위한 패턴 개선
-                            # 마크다운 코드 블록 안의 JSON을 먼저 찾기
                             json_in_code_block = re.search(r'```(?:json)?\s*({[\s\S]*?})\s*```', facilitator_response)
-                            
-                            # 그 다음 일반 텍스트에서 중괄호로 둘러싸인 부분 찾기
-                            json_raw_pattern = r'({[\s\S]*?})'
-                            json_matches = re.findall(json_raw_pattern, facilitator_response)
+                            json_matches = re.findall(r'({[\s\S]*?})', facilitator_response)
                             
                             parsed_successfully = False
                             json_data = None
-                            parsing_error = None
                             json_str_attempted = None
                             
                             # 먼저 코드 블록 내 JSON 파싱 시도
@@ -661,7 +905,6 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                                     parsed_successfully = True
                                     print(f"INFO: Successfully parsed JSON from code block")
                                 except json.JSONDecodeError as e:
-                                    parsing_error = str(e)
                                     print(f"WARNING: Failed to parse JSON from code block: {e}")
                             
                             # 실패한 경우 일반 텍스트에서 찾은 중괄호 블록 시도
@@ -674,7 +917,6 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                                         print(f"INFO: Successfully parsed JSON from regular text")
                                         break
                                     except json.JSONDecodeError:
-                                        # 계속 다음 매치 시도
                                         continue
                             
                             # 마지막 시도: 응답 전체를 JSON으로 파싱
@@ -685,7 +927,6 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                                     parsed_successfully = True
                                     print(f"INFO: Parsed entire response as JSON")
                                 except json.JSONDecodeError as e:
-                                    parsing_error = str(e)
                                     print(f"ERROR: Failed to parse any JSON from facilitator_response: {e}")
                                     print(f"Response is not valid JSON: {facilitator_response[:200]}...")
                             
@@ -699,30 +940,35 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                                     print(f"INFO: Forcing transition to FINAL_SUMMARY at round {current_round}/{max_discussion_rounds}")
                                     next_agent = "FINAL_SUMMARY"
                                     topic_for_next = "최대 토론 라운드에 도달하여 최종 요약을 진행합니다."
-                                    add_message("system", topic_for_next, avatar="ℹ️")
+                                    
+                                    # 결과에 강제 전환 메시지 추가
+                                    discussion_results.append({
+                                        "type": "system_message",
+                                        "content": topic_for_next,
+                                        "avatar": "ℹ️"
+                                    })
                                 
                                 print(f"DEBUG: Extracted JSON data from facilitator_response:")
                                 print(f"  - next_agent: {next_agent}")
                                 print(f"  - topic: {topic_for_next[:50]}...")
                                 print(f"  - reasoning: {reasoning[:50]}...")
-                                
-                                # 토론 히스토리에 퍼실리테이터 발언 추가
-                                update_discussion_history(session_id_string, "facilitator", facilitator_response)
                             else:
                                 # JSON 파싱 실패 시 오류 처리
                                 print(f"ERROR: Could not extract valid JSON from facilitator_response")
                                 if json_str_attempted:
                                     print(f"Last JSON string attempted to parse: {json_str_attempted[:200]}...")
                                 
-                                # 오류 발생 시 기본값 설정하여 계속 진행
-                                next_agent = "FINAL_SUMMARY"  # 기본적으로 토론 종료
+                                # 오류 발생 시 기본값 설정
+                                next_agent = "FINAL_SUMMARY"
                                 topic_for_next = "토론 진행 중 오류가 발생하여 최종 요약으로 진행합니다."
                                 
-                                # 오류 메시지를 대화에 추가
-                                show_system_message("phase2_error", rerun_immediately=False)
-                                
-                            # UI 업데이트를 위해 필요
-                            st.session_state.need_rerun = True
+                                # 결과에 오류 메시지 추가
+                                discussion_results.append({
+                                    "type": "error_message",
+                                    "content": "토론 진행 중 오류가 발생했습니다.",
+                                    "message_key": "phase2_error",
+                                    "avatar": "ℹ️"
+                                })
                 
                 # 다음 에이전트가 없거나 빈 문자열이면 종료
                 if not next_agent:
@@ -732,16 +978,19 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                 # 라우팅 처리
                 if next_agent == "USER":
                     # 사용자 피드백 요청
-                    show_system_message("user_prompt", rerun_immediately=False)
-                    add_message("assistant", process_text_for_display(topic_for_next), avatar="ℹ️")
+                    discussion_results.append({
+                        "type": "user_prompt",
+                        "content": topic_for_next,
+                        "message_key": "user_prompt",
+                        "avatar": "ℹ️"
+                    })
                     
-                    # 사용자 입력을 기다리기 위한 상태 설정
+                    # 사용자 입력 대기 상태 설정
                     st.session_state.awaiting_user_input_phase2 = True
                     st.session_state.phase2_user_prompt = topic_for_next
-                    st.session_state.need_rerun = True
                     
-                    # 사용자 입력을 기다리기 위해 루프를 빠져나감 (UI에서 입력 후 다시 호출)
-                    return True
+                    # 사용자 입력을 기다리기 위해 루프를 빠져나감
+                    return True, discussion_results
                 
                 elif next_agent == "FINAL_SUMMARY":
                     # 최종 요약으로 이동
@@ -749,7 +998,11 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                     st.session_state.phase2_discussion_complete = True
                     
                     # 토론 완료 메시지 표시
-                    show_system_message("phase2_complete", rerun_immediately=False)
+                    discussion_results.append({
+                        "type": "system_message",
+                        "message_key": "phase2_complete",
+                        "avatar": "ℹ️"
+                    })
                     
                     # 최종 요약 에이전트 실행
                     final_summary_agent = orchestrator.get_phase2_final_summary_agent()
@@ -781,9 +1034,13 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                         if is_final_event and state_delta:
                             final_summary = state_delta.get("final_summary_report_phase2", "")
                             if final_summary and isinstance(final_summary, str):
-                                # 최종 요약을 UI에 표시
-                                show_system_message("final_summary_phase2_intro", rerun_immediately=False)
-                                add_message("assistant", process_text_for_display(final_summary), avatar=agent_to_avatar_map["final_summary"])
+                                # 결과에 최종 요약 추가
+                                discussion_results.append({
+                                    "type": "final_summary",
+                                    "content": final_summary,
+                                    "message_key": "final_summary_phase2_intro",
+                                    "avatar": agent_to_avatar_map["final_summary"]
+                                })
                                 
                                 # 토론 히스토리에 최종 요약 추가
                                 update_discussion_history(session_id_string, "final_summary", final_summary)
@@ -792,10 +1049,9 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                     
                     # 최종 요약 완료 상태 설정
                     st.session_state.phase2_summary_complete = final_summary_processed
-                    st.session_state.need_rerun = True
                     
                     # 토론과 요약 모두 완료
-                    return final_summary_processed
+                    return final_summary_processed, discussion_results
                 
                 else:
                     # 특정 페르소나 에이전트 실행
@@ -867,17 +1123,17 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                                 # 해당 페르소나의 intro 메시지 표시
                                 intro_msg_key = persona_intro_msg_key_map.get(next_agent, "")
                                 if intro_msg_key:
-                                    show_system_message(intro_msg_key, rerun_immediately=False)
+                                    AppStateManager.show_system_message(intro_msg_key)
                                 
                                 # 페르소나 응답을 UI에 표시
-                                add_message("assistant", process_text_for_display(persona_response), avatar=agent_to_avatar_map[next_agent])
+                                AppStateManager.add_message("assistant", AppStateManager.process_text_for_display(persona_response), avatar=agent_to_avatar_map[next_agent])
                                 
                                 # 토론 히스토리에 페르소나 발언 추가
                                 update_discussion_history(session_id_string, next_agent, persona_response)
                                 
-                                # UI 업데이트를 위해 필요
-                                st.session_state.need_rerun = True
-            
+                                # 제거: UI 업데이트를 위한 need_rerun 플래그 설정
+                                # st.session_state.need_rerun = True
+
             except Exception as e:
                 print(f"ERROR in discussion round {current_round}: {e}")
                 import traceback
@@ -887,12 +1143,12 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
         # 최대 라운드에 도달한 경우
         if current_round > max_discussion_rounds and not st.session_state.get("phase2_summary_complete", False):
             print(f"DEBUG: Reached maximum discussion rounds ({max_discussion_rounds}) without completing summary")
-            show_system_message("phase2_complete", rerun_immediately=False)
+            AppStateManager.show_system_message("phase2_complete")
             st.session_state.phase2_discussion_complete = True
             
             # 최종 요약이 아직 실행되지 않았다면 강제로 실행
             print("INFO: Forcing final summary generation after reaching maximum discussion rounds")
-            add_message("system", "최대 토론 라운드에 도달하여 최종 요약을 진행합니다.", avatar="ℹ️")
+            AppStateManager.add_message("system", "최대 토론 라운드에 도달하여 최종 요약을 진행합니다.", avatar="ℹ️")
             
             # 최종 요약 에이전트 실행
             final_summary_agent = orchestrator.get_phase2_final_summary_agent()
@@ -925,28 +1181,32 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                     final_summary = state_delta.get("final_summary_report_phase2", "")
                     if final_summary and isinstance(final_summary, str):
                         # 최종 요약을 UI에 표시
-                        show_system_message("final_summary_phase2_intro", rerun_immediately=False)
-                        add_message("assistant", process_text_for_display(final_summary), avatar=agent_to_avatar_map["final_summary"])
+                        AppStateManager.show_system_message("final_summary_phase2_intro")
+                        AppStateManager.add_message("assistant", AppStateManager.process_text_for_display(final_summary), avatar=agent_to_avatar_map["final_summary"])
                         
                         # 토론 히스토리에 최종 요약 추가
                         update_discussion_history(session_id_string, "final_summary", final_summary)
                         
                         final_summary_processed = True
                 
-                # 최종 요약 완료 상태 설정
-                st.session_state.phase2_summary_complete = final_summary_processed
+                    # 최종 요약 완료 상태 설정
+                    st.session_state.phase2_summary_complete = final_summary_processed
+                
+                    # 제거: 최종 요약 상태 설정 후 need_rerun 플래그 설정
+                    # st.session_state.need_rerun = True
             
-            st.session_state.need_rerun = True
+            # 제거: 최종 요약 완료 상태 설정 후 need_rerun 플래그 설정
+            # st.session_state.need_rerun = True
         
         # 최대 라운드에 도달했지만 FINAL_SUMMARY가 실행되지 않은 경우를 위한 안전장치
         if current_round > max_discussion_rounds and not st.session_state.get("phase2_summary_complete", False):
             print(f"DEBUG: Loop completed at maximum rounds but summary not generated. Forcing summary generation.")
-            show_system_message("phase2_complete", rerun_immediately=False)
+            AppStateManager.show_system_message("phase2_complete")
             st.session_state.phase2_discussion_complete = True
             
             # 최종 요약 강제 실행
             print("INFO: Executing final summary generation after loop completion")
-            add_message("system", "최대 토론 라운드에 도달하여 최종 요약을 진행합니다.", avatar="ℹ️")
+            AppStateManager.add_message("system", "최대 토론 라운드에 도달하여 최종 요약을 진행합니다.", avatar="ℹ️")
             
             # 최종 요약 에이전트 실행
             final_summary_agent = orchestrator.get_phase2_final_summary_agent()
@@ -979,18 +1239,22 @@ async def _run_phase2_discussion(session_id_string, orchestrator):
                     final_summary = state_delta.get("final_summary_report_phase2", "")
                     if final_summary and isinstance(final_summary, str):
                         # 최종 요약을 UI에 표시
-                        show_system_message("final_summary_phase2_intro", rerun_immediately=False)
-                        add_message("assistant", process_text_for_display(final_summary), avatar=agent_to_avatar_map["final_summary"])
+                        AppStateManager.show_system_message("final_summary_phase2_intro")
+                        AppStateManager.add_message("assistant", AppStateManager.process_text_for_display(final_summary), avatar=agent_to_avatar_map["final_summary"])
                         
                         # 토론 히스토리에 최종 요약 추가
                         update_discussion_history(session_id_string, "final_summary", final_summary)
                         
                         final_summary_processed = True
                 
-                # 최종 요약 완료 상태 설정
-                st.session_state.phase2_summary_complete = final_summary_processed
+                    # 최종 요약 완료 상태 설정
+                    st.session_state.phase2_summary_complete = final_summary_processed
+                
+                    # 제거: 최종 요약 완료 상태 설정 후 need_rerun 플래그 설정
+                    # st.session_state.need_rerun = True
             
-            st.session_state.need_rerun = True
+            # 제거: need_rerun 플래그 설정
+            # st.session_state.need_rerun = True
         
         return True  # 토론 진행 성공
     
@@ -1008,15 +1272,13 @@ def handle_phase2_discussion():
     토론 퍼실리테이터 에이전트와 페르소나 에이전트들 간의 대화를 조율합니다.
     """
     try:
-        # 올바른 EventActions 임포트 경로
-        from google.adk.events import Event, EventActions
-        
         print("Starting Phase 2 discussion...")
         
         # 현재 세션 상태 확인
-        if st.session_state.analysis_phase != "phase2_pending_start" and not st.session_state.awaiting_user_input_phase2:
-            print(f"WARNING: Unexpected analysis phase '{st.session_state.analysis_phase}' for handle_phase2_discussion")
-            return
+        if st.session_state.analysis_phase not in ["phase2_pending_start", "phase2_running", "phase2_user_input"]:
+            if not st.session_state.awaiting_user_input_phase2:
+                print(f"WARNING: Unexpected analysis phase '{st.session_state.analysis_phase}' for handle_phase2_discussion")
+                return
         
         # 오케스트레이터 생성
         orchestrator = AIdeaLabOrchestrator(model_name=st.session_state.selected_model)
@@ -1026,84 +1288,117 @@ def handle_phase2_discussion():
         session_id_string = st.session_state.adk_session_id
         if not session_id_string:
             print("ERROR: No session ID available for phase 2 discussion")
-            st.session_state.analysis_phase = "phase2_error"
-            show_system_message("phase2_error")
-            st.session_state.need_rerun = True
+            AppStateManager.change_analysis_phase("phase2_error")
+            AppStateManager.show_system_message("phase2_error")
+            st.rerun()
             return
         
         # 세션 객체 가져오기
         session = st.session_state.session_manager_instance.get_session(session_id_string)
         if not session:
             print(f"ERROR: Failed to get session with ID {session_id_string}")
-            st.session_state.analysis_phase = "phase2_error"
-            show_system_message("phase2_error")
-            st.session_state.need_rerun = True
+            AppStateManager.change_analysis_phase("phase2_error")
+            AppStateManager.show_system_message("phase2_error")
+            st.rerun()
             return
         
-        # 사용자 입력을 기다리는 상태인 경우
-        if st.session_state.awaiting_user_input_phase2:
-            # 사용자 입력은 main() 함수에서 처리하고, 
-            # 여기서는 사용자 입력이 있은 후에 호출됨
+        # 최초 토론 시작 시 2단계로 전환
+        if st.session_state.analysis_phase == "phase2_pending_start":
+            # 환영 메시지 표시
+            AppStateManager.show_system_message("phase2_welcome")
             
-            # 1. discussion_history_phase2에 사용자 응답 추가
-            user_response = st.session_state.get("phase2_user_response", "")
-            if user_response:
-                # update_discussion_history 함수 사용하여 사용자 응답 추가
-                update_discussion_history(session_id_string, "user", user_response)
-                
-                # 사용자 입력 상태 초기화
-                st.session_state.awaiting_user_input_phase2 = False
-                st.session_state.phase2_user_prompt = ""
-                st.session_state.phase2_user_response = ""
-        else:
-            # 최초 토론 시작 시 2단계로 전환
-            if st.session_state.analysis_phase == "phase2_pending_start":
-                # 환영 메시지 표시
-                show_system_message("phase2_welcome")
-                
-                # 세션 상태를 phase2로 전환
-                st.session_state.session_manager_instance.transition_to_phase2()
-                
-                # Streamlit 세션 상태 업데이트
-                st.session_state.analysis_phase = "phase2_running"
+            # 세션 상태를 phase2로 전환
+            st.session_state.session_manager_instance.transition_to_phase2()
+            
+            # Streamlit 세션 상태 업데이트
+            AppStateManager.change_analysis_phase("phase2_running")
         
         # 2단계 토론 실행
         with st.spinner("AI 페르소나들이 토론 중입니다... 이 작업은 최대 1-2분 소요될 수 있습니다."):
-            discussion_success = asyncio.run(_run_phase2_discussion(
+            discussion_success, discussion_results = asyncio.run(_run_phase2_discussion(
                 session_id_string,
                 orchestrator
             ))
+        
+        # 토론 결과 UI에 표시
+        if discussion_results:
+            for result in discussion_results:
+                result_type = result.get("type")
+                content = result.get("content")
+                avatar = result.get("avatar")
+                message_key = result.get("message_key")
+                
+                if result_type == "system_message":
+                    if message_key:
+                        AppStateManager.show_system_message(message_key)
+                    else:
+                        AppStateManager.add_message("system", content, avatar=avatar)
+                
+                elif result_type == "error_message":
+                    if message_key:
+                        AppStateManager.show_system_message(message_key)
+                    else:
+                        AppStateManager.add_message("system", content, avatar=avatar)
+                
+                elif result_type == "user_prompt":
+                    if message_key:
+                        AppStateManager.show_system_message(message_key)
+                    AppStateManager.add_message("assistant", AppStateManager.process_text_for_display(content), avatar=avatar)
+                
+                elif result_type == "facilitator_response":
+                    if message_key:
+                        AppStateManager.show_system_message(message_key)
+                    AppStateManager.add_message("assistant", AppStateManager.process_text_for_display(content), avatar=avatar)
+                
+                elif result_type == "persona_response":
+                    if message_key:
+                        AppStateManager.show_system_message(message_key)
+                    AppStateManager.add_message("assistant", AppStateManager.process_text_for_display(content), avatar=avatar)
+                
+                elif result_type == "final_summary":
+                    if message_key:
+                        AppStateManager.show_system_message(message_key)
+                    AppStateManager.add_message("assistant", AppStateManager.process_text_for_display(content), avatar=avatar)
+                
+                elif result_type == "user_response":
+                    # 이미 UI에 표시되었으므로 아무 작업도 하지 않음
+                    pass
         
         # 토론 결과에 따른 상태 업데이트
         if discussion_success:
             if st.session_state.phase2_discussion_complete and st.session_state.phase2_summary_complete:
                 # 토론과 요약이 모두 완료된 경우
-                st.session_state.analysis_phase = "phase2_complete"
+                AppStateManager.change_analysis_phase("phase2_complete")
             elif st.session_state.awaiting_user_input_phase2:
                 # 사용자 입력을 기다리는 경우
-                st.session_state.analysis_phase = "phase2_user_input"
+                AppStateManager.change_analysis_phase("phase2_user_input")
             else:
                 # 토론이 계속 진행 중인 경우
-                st.session_state.analysis_phase = "phase2_running"
+                AppStateManager.change_analysis_phase("phase2_running")
         else:
             # 토론 중 오류 발생
-            st.session_state.analysis_phase = "phase2_error"
-            show_system_message("phase2_error")
+            AppStateManager.change_analysis_phase("phase2_error")
+            AppStateManager.show_system_message("phase2_error")
         
-        # UI 업데이트를 위해 필요
-        st.session_state.need_rerun = True
+        # UI 갱신
+        st.rerun()
     
     except Exception as e:
         print(f"Critical error in handle_phase2_discussion: {e}")
         import traceback
         traceback.print_exc()
-        st.session_state.analysis_phase = "phase2_error"
-        show_system_message("phase2_error")
-        st.session_state.need_rerun = True
+        AppStateManager.change_analysis_phase("phase2_error")
+        AppStateManager.show_system_message("phase2_error")
+        st.rerun()
 
 def main():
+    """
+    메인 UI 렌더링 함수
+    
+    Streamlit 앱의 전체 UI를 구성하고 사용자 상호작용을 처리합니다.
+    """
     # 세션 상태 초기화
-    initialize_session_state()
+    AppStateManager.initialize_session_state()
     
     # 로그 디렉토리 생성
     if not os.path.exists("logs"):
@@ -1122,10 +1417,12 @@ def main():
         selected_display_name = st.selectbox(
             "모델 선택",
             options=list(model_options.keys()),
-            index=list(model_options.values()).index(st.session_state.selected_model) if st.session_state.selected_model in model_options.values() else 0
+            index=list(model_options.values()).index(st.session_state.selected_model) if st.session_state.selected_model in model_options.values() else 0,
+            key="model_selector",
+            on_change=lambda: AppStateManager.change_model(model_options[st.session_state.model_selector])
         )
         
-        # 선택된 모델의 내부 ID 가져오기
+        # 선택된 모델의 내부 ID
         selected_model_id = model_options[selected_display_name]
         
         # 모델 성능 정보 표시
@@ -1148,20 +1445,8 @@ def main():
         if best_model_info and best_model_info[0] != selected_model_id:
             best_model_name = MODEL_CONFIGS[ModelType(best_model_info[0])]["display_name"] if best_model_info[0] in [m.value for m in ModelType] else best_model_info[0]
             st.info(f"💡 추천 모델: {best_model_name} (성공률: {best_model_info[1]['success_rate']:.1%})")
-        
-        # 모델 변경 적용
-        if st.session_state.selected_model != selected_model_id:
-            st.session_state.selected_model = selected_model_id
-            st.write(f"Model selection changed to: {selected_model_id}. Restarting session.")
-            restart_session()
-            st.rerun()
     
-    # 나머지 main 함수 UI 코드는 그대로 유지
-    initialize_session_state()
-    
-    # SessionManager 인스턴스 가져오기
-    session_manager = st.session_state.session_manager_instance
-    
+    # 앱 제목 및 소개
     st.title("AIdea Lab - 아이디어 분석 워크숍")
     st.markdown("당신의 아이디어를 AI가 다양한 관점에서 분석해드립니다!")
     
@@ -1169,7 +1454,7 @@ def main():
     messages_container = st.container()
     with messages_container:
         if st.session_state.get('messages'):
-            for idx, message in enumerate(st.session_state.messages): # Added enumerate for unique keys if needed
+            for idx, message in enumerate(st.session_state.messages):
                 role = message.get("role", "")
                 msg_content = message.get("content", "")
                 avatar = message.get("avatar", None)
@@ -1180,8 +1465,7 @@ def main():
                     elif role == "assistant":
                         st.chat_message(role, avatar=avatar).write(msg_content)
                     elif role == "system":
-                        # 시스템 메시지를 info 박스 대신 일반 메시지처럼 보이게 처리
-                        # st.info(msg_content) 
+                        # 시스템 메시지를 chat_message로 표시
                         st.chat_message("assistant", avatar=avatar if avatar else "ℹ️").markdown(f"_{msg_content}_")
                 except Exception as e:
                     print(f"Error rendering message (idx: {idx}): Role={role}, Avatar={avatar}, Exc={e}")
@@ -1192,39 +1476,33 @@ def main():
     with input_container:
         current_analysis_phase = st.session_state.get("analysis_phase", "idle")
 
+        # 단계별 UI 처리
         if current_analysis_phase == "idle":
-            # 추가 정보 입력 버튼 (토글 방식)
+            # 추가 정보 입력 버튼
             additional_info_button_label = "아이디어 상세 정보 숨기기" if st.session_state.get("show_additional_info") else "아이디어 상세 정보 입력 (선택)"
-            if st.button(additional_info_button_label, key="toggle_additional_info_button"):
-                st.session_state.show_additional_info = not st.session_state.get("show_additional_info", False)
-                if st.session_state.show_additional_info:
-                     st.session_state.expander_state = True # 펼칠 때만 True
-                st.session_state.need_rerun = True
+            st.button(
+                additional_info_button_label, 
+                key="toggle_additional_info_button", 
+                on_click=AppStateManager.toggle_additional_info
+            )
 
             if st.session_state.get("show_additional_info"):
                 with st.expander("아이디어 상세 정보", expanded=st.session_state.get("expander_state", True)):
                     st.text_area("아이디어의 핵심 목표 또는 해결하고자 하는 문제:", key="user_goal_input", value=st.session_state.get("user_goal",""))
                     st.text_area("주요 제약 조건 (예: 예산, 시간, 기술 등):", key="user_constraints_input", value=st.session_state.get("user_constraints",""))
                     st.text_area("중요하게 생각하는 가치 (예: 효율성, 창의성 등):", key="user_values_input", value=st.session_state.get("user_values",""))
-                    if st.button("상세 정보 저장", key="save_additional_info"):
-                        st.session_state.user_goal = st.session_state.user_goal_input
-                        st.session_state.user_constraints = st.session_state.user_constraints_input
-                        st.session_state.user_values = st.session_state.user_values_input
-                        st.session_state.expander_state = False # 저장 후 닫기
-                        st.session_state.show_additional_info = False # 저장 후 버튼 텍스트 변경 위해
-                        st.success("상세 정보가 저장되었습니다.")
-                        st.session_state.need_rerun = True
+                    st.button(
+                        "상세 정보 저장", 
+                        key="save_additional_info", 
+                        on_click=AppStateManager.save_additional_info
+                    )
             
-            user_input = st.chat_input("여기에 아이디어를 입력하고 Enter를 누르세요...")
-            if user_input:
-                if not st.session_state.get("user_goal"): # 상세정보가 입력되지 않았다면, 확장표시
-                    st.session_state.show_additional_info = True
-                    st.session_state.expander_state = True
-
-                add_message("user", user_input)
-                st.session_state.current_idea = user_input
-                st.session_state.analysis_phase = "phase1_pending_start"
-                st.session_state.need_rerun = True
+            # 아이디어 입력 필드
+            st.chat_input(
+                "여기에 아이디어를 입력하고 Enter를 누르세요...",
+                key="idea_input",
+                on_submit=lambda: AppStateManager.submit_idea(st.session_state.idea_input)
+            )
         
         elif current_analysis_phase == "phase1_pending_start":
             if st.session_state.current_idea and st.session_state.current_idea != st.session_state.get("analyzed_idea"):
@@ -1234,40 +1512,47 @@ def main():
                          st.session_state.user_goal = st.session_state.get("user_goal_input", st.session_state.get("user_goal",""))
                          st.session_state.user_constraints = st.session_state.get("user_constraints_input", st.session_state.get("user_constraints",""))
                          st.session_state.user_values = st.session_state.get("user_values_input", st.session_state.get("user_values",""))
-                    run_phase1_analysis_and_update_ui() # 여기서 분석 실행 및 상태 변경
-            else: # 이미 분석된 아이디어거나 current_idea가 없는 경우 (보통 발생 안 함)
-                st.session_state.analysis_phase = "idle" # 다시 idle로
-                st.session_state.need_rerun = True
-
+                    run_phase1_analysis_and_update_ui()  # 분석 실행
+            else:
+                AppStateManager.change_analysis_phase("idle")
+                st.rerun()
 
         elif current_analysis_phase == "phase1_complete":
             st.success("✔️ 1단계 아이디어 분석이 완료되었습니다.")
             
             col1, col2 = st.columns(2)
             with col1:
-                if st.button("💬 2단계 토론 시작하기", key="start_phase2_button", use_container_width=True):
-                    st.session_state.analysis_phase = "phase2_pending_start" 
-                    st.session_state.proceed_to_phase2 = True
-                    print("User selected to start Phase 2 discussion.")
-                    st.session_state.need_rerun = True
+                st.button(
+                    "💬 2단계 토론 시작하기", 
+                    key="start_phase2_button", 
+                    use_container_width=True,
+                    on_click=AppStateManager.start_phase2_discussion
+                )
             
             with col2:
-                if st.button("✨ 새 아이디어 분석", key="new_idea_after_phase1_button", use_container_width=True):
-                    restart_session(keep_messages=False)
-                    print("User selected to analyze a new idea after Phase 1 completion.")
+                st.button(
+                    "✨ 새 아이디어 분석", 
+                    key="new_idea_after_phase1_button", 
+                    use_container_width=True,
+                    on_click=lambda: AppStateManager.restart_session(keep_messages=False)
+                )
 
         elif current_analysis_phase == "phase1_error":
-            # 오류 메시지는 show_system_message를 통해 이미 messages에 추가되었을 것임
-            
             col_retry, col_restart_new = st.columns(2)
             with col_retry:
-                if st.button("같은 아이디어로 재시도", key="retry_button_error", use_container_width=True):
-                    st.session_state.analysis_phase = "phase1_pending_start" 
-                    st.session_state.analyzed_idea = "" 
-                    st.session_state.need_rerun = True
+                st.button(
+                    "같은 아이디어로 재시도", 
+                    key="retry_button_error", 
+                    use_container_width=True,
+                    on_click=AppStateManager.retry_analysis
+                )
             with col_restart_new:
-                if st.button("새 아이디어로 시작", key="restart_button_error", use_container_width=True):
-                    restart_session(keep_messages=False)
+                st.button(
+                    "새 아이디어로 시작", 
+                    key="restart_button_error", 
+                    use_container_width=True,
+                    on_click=lambda: AppStateManager.restart_session(keep_messages=False)
+                )
         
         elif current_analysis_phase == "phase2_pending_start":
             # 2단계 토론 시작 처리
@@ -1277,52 +1562,98 @@ def main():
         elif current_analysis_phase == "phase2_running":
             # 토론 진행 중 표시
             st.info("AI 페르소나들이 토론 중입니다...")
-            # 토론 진행이 이미 handle_phase2_discussion에서 처리되고 있으므로 별도 액션 불필요
-            pass
+            handle_phase2_discussion()
             
         elif current_analysis_phase == "phase2_user_input":
             # 사용자 입력을 받아야 하는 상태
             if st.session_state.awaiting_user_input_phase2:
                 st.info(f"토론에 참여해 주세요: {st.session_state.phase2_user_prompt}")
-                user_response = st.chat_input("여기에 의견을 입력하고 Enter를 누르세요...")
-                
-                if user_response:
-                    # 사용자 입력을 UI에 표시
-                    add_message("user", user_response)
-                    
-                    # 입력값 저장 및 토론 계속 진행
-                    st.session_state.phase2_user_response = user_response
-                    st.session_state.analysis_phase = "phase2_running"
-                    st.session_state.need_rerun = True
-                    
-                    # 토론 처리 함수 재호출
-                    handle_phase2_discussion()
+                st.chat_input(
+                    "여기에 의견을 입력하고 Enter를 누르세요...",
+                    key="phase2_response_input",
+                    on_submit=lambda: AppStateManager.submit_phase2_response(st.session_state.phase2_response_input)
+                )
         
         elif current_analysis_phase == "phase2_complete":
             # 2단계 토론 완료 표시
             st.success("✔️ 2단계 토론과 최종 요약이 완료되었습니다.")
             
-            if st.button("✨ 새 아이디어 분석", key="new_idea_after_phase2_button", use_container_width=True):
-                restart_session(keep_messages=False)
-                print("User selected to analyze a new idea after Phase 2 completion.")
+            st.button(
+                "✨ 새 아이디어 분석", 
+                key="new_idea_after_phase2_button", 
+                use_container_width=True,
+                on_click=lambda: AppStateManager.restart_session(keep_messages=False)
+            )
                 
         elif current_analysis_phase == "phase2_error":
             # 2단계 토론 중 오류 발생
             col_retry, col_restart_new = st.columns(2)
             with col_retry:
-                if st.button("같은 아이디어로 재시도", key="retry_phase2_button_error", use_container_width=True):
-                    st.session_state.analysis_phase = "phase2_pending_start" 
-                    st.session_state.awaiting_user_input_phase2 = False
-                    st.session_state.phase2_discussion_complete = False
-                    st.session_state.phase2_summary_complete = False
-                    st.session_state.need_rerun = True
+                st.button(
+                    "같은 아이디어로 재시도", 
+                    key="retry_phase2_button_error", 
+                    use_container_width=True,
+                    on_click=AppStateManager.retry_phase2
+                )
             with col_restart_new:
-                if st.button("새 아이디어로 시작", key="restart_phase2_button_error", use_container_width=True):
-                    restart_session(keep_messages=False)
+                st.button(
+                    "새 아이디어로 시작", 
+                    key="restart_phase2_button_error", 
+                    use_container_width=True,
+                    on_click=lambda: AppStateManager.restart_session(keep_messages=False)
+                )
+
+
+# 남아있는 전역 함수들을 리팩토링
+def show_system_message(message_key):
+    """
+    시스템 메시지 표시 (이전 방식, 제거 예정)
     
-    if st.session_state.get("need_rerun", False):
-        st.session_state.need_rerun = False
-        st.rerun()
+    AppStateManager.show_system_message()를 사용하도록 수정 중입니다.
+    """
+    message_content = SYSTEM_MESSAGES.get(message_key)
+    if message_content:
+        print(f"Showing system message for key '{message_key}': {message_content[:70]}...")
+        AppStateManager.add_message("system", message_content, avatar="ℹ️")
+    else:
+        print(f"WARNING: System message key '{message_key}' not defined in SYSTEM_MESSAGES.")
+
+
+def initialize_session_state():
+    """
+    세션 상태 초기화 (이전 방식, 제거 예정)
+    
+    AppStateManager.initialize_session_state()를 사용하도록 수정 중입니다.
+    """
+    AppStateManager.initialize_session_state()
+
+
+def process_text_for_display(text_data):
+    """
+    텍스트 표시용 처리 (이전 방식, 제거 예정)
+    
+    AppStateManager.process_text_for_display()를 사용하도록 수정 중입니다.
+    """
+    return AppStateManager.process_text_for_display(text_data)
+
+
+def add_message(role, content, avatar=None):
+    """
+    메시지 추가 (이전 방식, 제거 예정)
+    
+    AppStateManager.add_message()를 사용하도록 수정 중입니다.
+    """
+    AppStateManager.add_message(role, content, avatar)
+
+
+def restart_session(keep_messages=False):
+    """
+    세션 재시작 (이전 방식, 제거 예정)
+    
+    AppStateManager.restart_session()를 사용하도록 수정 중입니다.
+    """
+    AppStateManager.restart_session(keep_messages=keep_messages)
+
 
 if __name__ == "__main__":
     main()

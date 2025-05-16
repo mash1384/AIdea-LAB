@@ -6,9 +6,13 @@ AIdea Lab 세션 관리자
 """
 
 import uuid
+import logging
 from google.adk.sessions import InMemorySessionService, Session
 from google.adk.events import Event, EventActions # EventActions와 함께 Event도 임포트합니다.
 from typing import Dict, Any, Optional, Tuple
+
+# 모듈 레벨 로거 설정
+logger = logging.getLogger(__name__)
 
 class SessionManager:
     """
@@ -45,10 +49,10 @@ class SessionManager:
                 state=initial_state if initial_state else {} # 초기 상태 전달
             )
             self.active_sessions[self.user_id] = session_id
-            print(f"SessionManager: Created session ID '{session_id}' with initial state: {initial_state}")
+            logger.info(f"SessionManager: Created session ID '{session_id}' with initial state: {initial_state}")
             return session, session_id
         except Exception as e:
-            print(f"SessionManager: Error creating session ID '{session_id}': {e}")
+            logger.error(f"SessionManager: Error creating session ID '{session_id}': {e}", exc_info=True)
             return None, session_id # 세션 생성 실패 시 객체는 None
 
     def get_session(self, session_id: Optional[str] = None) -> Optional[Session]:
@@ -64,19 +68,19 @@ class SessionManager:
         if session_id is None:
             session_id = self.active_sessions.get(self.user_id)
             if session_id is None:
-                print("SessionManager: No active session ID found for get_session.")
+                logger.warning("SessionManager: No active session ID found for get_session.")
                 return None
         
-        print(f"SessionManager: Attempting to get session with ID '{session_id}'")
+        logger.debug(f"SessionManager: Attempting to get session with ID '{session_id}'")
         session = self.session_service.get_session(
             app_name=self.app_name,
             user_id=self.user_id,
             session_id=session_id
         )
         if session:
-            print(f"SessionManager: Successfully retrieved session with ID '{session_id}'. State keys: {list(session.state.keys())}")
+            logger.debug(f"SessionManager: Successfully retrieved session with ID '{session_id}'. State keys: {list(session.state.keys())}")
         else:
-            print(f"SessionManager: Failed to retrieve session with ID '{session_id}'.")
+            logger.warning(f"SessionManager: Failed to retrieve session with ID '{session_id}'.")
         return session
 
     def get_active_session_id(self) -> Optional[str]:
@@ -96,7 +100,7 @@ class SessionManager:
             session_id (str): 활성화할 세션 ID
         """
         self.active_sessions[self.user_id] = session_id
-        print(f"SessionManager: Set active session ID to '{session_id}'")
+        logger.info(f"SessionManager: Set active session ID to '{session_id}'")
 
     def update_session_state(self, state_updates: Dict[str, Any]) -> bool:
         """
@@ -112,16 +116,16 @@ class SessionManager:
         # 현재 세션 ID 가져오기
         active_session_id = self.get_active_session_id()
         if active_session_id is None:
-            print("SessionManager: Cannot update state, no active session ID found.")
+            logger.error("SessionManager: Cannot update state, no active session ID found.")
             return False
         
         # 현재 세션 객체 가져오기
         current_session = self.get_session(active_session_id)
         if current_session is None:
-            print(f"SessionManager: Cannot update state, failed to get session with ID '{active_session_id}'.")
+            logger.error(f"SessionManager: Cannot update state, failed to get session with ID '{active_session_id}'.")
             return False
         
-        print(f"SessionManager: Updating state for session ID '{current_session.id}' using event mechanism.")
+        logger.info(f"SessionManager: Updating state for session ID '{current_session.id}' using event mechanism.")
         
         # EventActions 객체 생성
         event_actions = EventActions(state_delta=state_updates)
@@ -137,12 +141,10 @@ class SessionManager:
         # 이벤트를 세션에 추가하여 상태 업데이트
         try:
             self.session_service.append_event(session=current_session, event=new_event)
-            print(f"SessionManager: Successfully updated state for session ID '{current_session.id}' with keys: {list(state_updates.keys())}")
+            logger.info(f"SessionManager: Successfully updated state for session ID '{current_session.id}' with keys: {list(state_updates.keys())}")
             return True
         except Exception as e:
-            print(f"SessionManager: Error updating state for session ID '{current_session.id}': {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception(f"SessionManager: Error updating state for session ID '{current_session.id}'")
             return False
 
     def get_session_state_value(self, key: str, default: Any = None) -> Any:
@@ -180,26 +182,26 @@ class SessionManager:
         if user_values:
             initial_state_payload["user_values"] = user_values
         
-        print(f"SessionManager: Preparing to create new session with initial state: {initial_state_payload}")
+        logger.info(f"SessionManager: Preparing to create new session with initial state: {initial_state_payload}")
         # create_session 호출 시 initial_state 전달
         session, session_id = self.create_session(initial_state=initial_state_payload)
 
         if session:
             retrieved_session = self.get_session(session_id)
             if retrieved_session and retrieved_session.state.get("initial_idea") == initial_idea:
-                print(f"SessionManager: Successfully started session ID '{session_id}' with initial_idea: '{retrieved_session.state.get('initial_idea')}'")
+                logger.info(f"SessionManager: Successfully started session ID '{session_id}' with initial_idea: '{retrieved_session.state.get('initial_idea')}'")
                 self.set_active_session_id(session_id) 
                 return retrieved_session, session_id 
             elif retrieved_session:
-                print(f"SessionManager: WARNING - Verification of initial_idea for session ID '{session_id}' failed or incomplete. Found: '{retrieved_session.state.get('initial_idea')}', Expected: '{initial_idea}'. State keys: {list(retrieved_session.state.keys())}")
+                logger.warning(f"SessionManager: WARNING - Verification of initial_idea for session ID '{session_id}' failed or incomplete. Found: '{retrieved_session.state.get('initial_idea')}', Expected: '{initial_idea}'. State keys: {list(retrieved_session.state.keys())}")
                 self.set_active_session_id(session_id)
                 return retrieved_session, session_id 
             else:
-                print(f"SessionManager: ERROR - Session created for ID '{session_id}' but failed to retrieve it for verification.")
+                logger.error(f"SessionManager: ERROR - Session created for ID '{session_id}' but failed to retrieve it for verification.")
                 self.set_active_session_id(session_id) 
                 return None, session_id 
         else:
-            print(f"SessionManager: ERROR - Failed to create session in start_new_idea_session for idea: {initial_idea}")
+            logger.error(f"SessionManager: ERROR - Failed to create session in start_new_idea_session for idea: {initial_idea}")
             return None, session_id # session_id는 반환하되, session 객체는 None
     
     def transition_to_phase2(self) -> bool:
@@ -209,11 +211,11 @@ class SessionManager:
         """
         session = self.get_session() # 현재 활성화된 세션 (복사본일 수 있음)
         if session is None:
-            print("SessionManager: Cannot transition to phase2, no active session.")
+            logger.error("SessionManager: Cannot transition to phase2, no active session.")
             return False
         
         session_id_for_log = session.id # 로깅 및 검증용
-        print(f"SessionManager: Attempting to transition session ID '{session_id_for_log}' to phase2 using an event with state_delta.")
+        logger.info(f"SessionManager: Attempting to transition session ID '{session_id_for_log}' to phase2 using an event with state_delta.")
         
         # 1. 변경할 상태 정의
         state_changes = {
@@ -240,12 +242,12 @@ class SessionManager:
             # self.session_service.append_event는 전달된 session 객체의 ID를 사용하여
             # 내부 저장소에 있는 실제 세션 객체를 찾아 이벤트를 추가하고 상태를 업데이트합니다.
             self.session_service.append_event(session=session, event=transition_event)
-            print(f"SessionManager: Successfully appended phase2 transition event for session ID '{session_id_for_log}'.")
+            logger.info(f"SessionManager: Successfully appended phase2 transition event for session ID '{session_id_for_log}'.")
 
             # 확인을 위해 다시 세션을 가져와 상태를 로깅
             verified_session = self.get_session(session_id_for_log) # 저장소에서 최신 세션 정보를 다시 가져옴
             if verified_session and verified_session.state.get("current_phase") == "phase2":
-                print(f"SessionManager: Verified transition to phase2 for session ID '{session_id_for_log}'. State: {verified_session.state}")
+                logger.info(f"SessionManager: Verified transition to phase2 for session ID '{session_id_for_log}'. State: {verified_session.state}")
                 return True
             else:
                 current_phase_state = "N/A"
@@ -253,11 +255,9 @@ class SessionManager:
                 if verified_session:
                     current_phase_state = verified_session.state.get("current_phase")
                     full_state_for_log = verified_session.state
-                print(f"SessionManager: FAILED to verify transition to phase2 for session ID '{session_id_for_log}' after appending event. Expected 'phase2', got '{current_phase_state}'.")
-                print(f"SessionManager: Full state for session {session_id_for_log} after attempt: {full_state_for_log}")
+                logger.error(f"SessionManager: FAILED to verify transition to phase2 for session ID '{session_id_for_log}' after appending event. Expected 'phase2', got '{current_phase_state}'.")
+                logger.debug(f"SessionManager: Full state for session {session_id_for_log} after attempt: {full_state_for_log}")
                 return False
         except Exception as e:
-            print(f"SessionManager: Error appending phase2 transition event for session ID '{session_id_for_log}': {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception(f"SessionManager: Error appending phase2 transition event for session ID '{session_id_for_log}'")
             return False

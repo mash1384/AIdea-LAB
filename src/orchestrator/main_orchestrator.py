@@ -435,7 +435,7 @@ class AIdeaLabOrchestrator:
         # 요약 에이전트의 GenerationConfig 생성
         summary_generate_config = types.GenerationConfig(
             temperature=0.3,  # 명확한 요약을 위해 낮은 온도 설정
-            max_output_tokens=4096  # 충분한 요약 내용을 위한 토큰 수 증가
+            max_output_tokens=7000  # 충분한 요약 내용을 위한 토큰 수 증가
         )
         
         # 2단계 최종 요약 에이전트 생성

@@ -1,7 +1,7 @@
 """
 AIdea Lab 세션 관리자
 
-이 모듈은 Google ADK 세션을 관리하고 Streamlit UI와 ADK 세션 간의 상태 동기화를 
+이 모듈은 Google ADK 세션을 관리하고 Streamlit UI와 ADK 세션 간의 상태 동기화를 
 담당하는 SessionManager 클래스를 제공합니다.
 """
 
@@ -100,32 +100,50 @@ class SessionManager:
 
     def update_session_state(self, state_updates: Dict[str, Any]) -> bool:
         """
-        현재 활성화된 세션의 상태를 업데이트합니다. 
-        (주의: ADK의 InMemorySessionService는 get_session() 시 복사본을 반환할 수 있으므로, 
-         이 메소드를 통한 직접적인 상태 업데이트는 ADK Runner 외부에서는 불안정할 수 있습니다. 
-         상태 업데이트는 가급적 ADK의 이벤트 메커니즘(state_delta)을 통해 수행하는 것이 권장됩니다.)
+        현재 활성화된 세션의 상태를 업데이트합니다.
+        ADK의 EventActions.state_delta를 사용하여 안정적인 상태 업데이트를 수행합니다.
+        
+        Args:
+            state_updates (Dict[str, Any]): 업데이트할 상태 키-값 쌍
+            
+        Returns:
+            bool: 상태 업데이트 성공 여부
         """
-        session = self.get_session()
-        if session is None:
-            print("SessionManager: Cannot update state, no active session found.")
+        # 현재 세션 ID 가져오기
+        active_session_id = self.get_active_session_id()
+        if active_session_id is None:
+            print("SessionManager: Cannot update state, no active session ID found.")
             return False
         
-        print(f"SessionManager: Updating state for session ID '{session.id}'. Current keys: {list(session.state.keys())}")
-        # 이 방식은 get_session()이 세션의 복사본을 반환하는 경우, 원본 저장소의 상태를 변경하지 않을 수 있습니다.
-        # ADK의 InMemorySessionService.append_event()는 내부적으로 저장된 세션 객체를 직접 수정합니다.
-        # 따라서 상태 변경은 해당 메서드를 사용하는 것이 더 안정적입니다.
-        for key, value in state_updates.items():
-            session.state[key] = value 
-            print(f"SessionManager: Set session.state['{key}'] = '{value}' (on a copy if not handled carefully)")
+        # 현재 세션 객체 가져오기
+        current_session = self.get_session(active_session_id)
+        if current_session is None:
+            print(f"SessionManager: Cannot update state, failed to get session with ID '{active_session_id}'.")
+            return False
         
-        # ADK InMemorySessionService는 명시적인 update_session 메소드가 없습니다.
-        # 변경 사항을 안정적으로 반영하려면 append_event를 사용해야 합니다.
-        print(f"SessionManager: session.state for session ID '{session.id}' was modified. "
-              "Verification of persistence needed if not using event-based updates.")
-        # 이 메서드는 ADK 외부에서 직접적인 상태 수정을 시도하므로, 성공 여부와 관계없이 True를 반환하는 것은 오해의 소지가 있을 수 있습니다.
-        # 실제로는 이 변경이 반영되지 않았을 가능성이 높습니다.
-        return True
-
+        print(f"SessionManager: Updating state for session ID '{current_session.id}' using event mechanism.")
+        
+        # EventActions 객체 생성
+        event_actions = EventActions(state_delta=state_updates)
+        
+        # Event 객체 생성
+        new_event = Event(
+            author=self.app_name,  # 또는 "system_session_manager"
+            actions=event_actions,
+            # invocation_id는 기본값으로 자동 생성됨
+            content=None
+        )
+        
+        # 이벤트를 세션에 추가하여 상태 업데이트
+        try:
+            self.session_service.append_event(session=current_session, event=new_event)
+            print(f"SessionManager: Successfully updated state for session ID '{current_session.id}' with keys: {list(state_updates.keys())}")
+            return True
+        except Exception as e:
+            print(f"SessionManager: Error updating state for session ID '{current_session.id}': {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
     def get_session_state_value(self, key: str, default: Any = None) -> Any:
         """

@@ -6,6 +6,7 @@ AIdea Lab Discussion Controller Module
 """
 
 import asyncio
+import json
 from google.adk.runners import Runner
 from google.genai import types
 from src.ui.state_manager import AppStateManager, SYSTEM_MESSAGES
@@ -171,66 +172,101 @@ class DiscussionController:
                     print("토론 퍼실리테이터가 다음 단계를 결정하고 있습니다...")
                     
                     event_stream = runner.run_async(
-                        user_id=self.user_id, session_id=session_id_string, new_message=input_content
+                        user_id=self.user_id,
+                        session_id=session_id_string,
+                        new_message=input_content
                     )
                     
                     facilitator_response_content_full = ""
-                    async for event in event_stream:
-                        if event.is_final_response() if hasattr(event, 'is_final_response') else False:
-                            facilitator_response_content = event.parts[0].text.strip()
-                            facilitator_response_content_full += facilitator_response_content
-                            print(f"DEBUG: Facilitator final response part: {facilitator_response_content}")
-                            try:
-                                facilitator_response_json = orchestrator.parse_facilitator_response(facilitator_response_content_full)
-                                next_agent_str = facilitator_response_json.get("next_agent")
-                                topic_for_next = facilitator_response_json.get("topic_for_next", "")
-                                facilitator_thinking_process = facilitator_response_json.get("thinking_process", "")
-                                print(f"DEBUG: Parsed facilitator response - next_agent: {next_agent_str}, topic_for_next: {topic_for_next}")
+                    parsed_facilitator_json = None
+                    max_retries = 3
+                    retry_count = 0
+                    
+                    while retry_count < max_retries:
+                        try:
+                            async for event in event_stream:
+                                event_actions = getattr(event, 'actions', None)
                                 
-                                facilitator_display_content = f"{facilitator_thinking_process}\n\n다음 토론 주제: {topic_for_next}\n다음 발언자: {self.agent_name_map.get(next_agent_str, next_agent_str)}"
-                                facilitator_message = {
-                                    "role": "assistant", "content": facilitator_display_content,
-                                    "avatar": self.agent_to_avatar_map["facilitator"], "speaker": "facilitator",
-                                    "speaker_name": self.agent_name_map["facilitator"]
-                                }
-                                if persona_first_appearance["facilitator"]:
-                                    intro_message = SYSTEM_MESSAGES.get(self.persona_intro_key_map["facilitator"], "")
-                                    discussion_messages.append({
-                                        "role": "system", "content": intro_message,
-                                        "avatar": self.agent_to_avatar_map["facilitator"], "speaker": "facilitator",
-                                        "speaker_name": self.agent_name_map["facilitator"]
-                                    })
-                                    persona_first_appearance["facilitator"] = False
-                                discussion_messages.append(facilitator_message)
-                                self.update_discussion_history(session_id_string, "facilitator", facilitator_display_content)
+                                # 스트리밍 텍스트 처리
+                                if (event_actions and 
+                                    hasattr(event_actions, 'content_delta') and 
+                                    event_actions.content_delta and 
+                                    hasattr(event_actions.content_delta, 'parts')):
+                                    delta_content = event_actions.content_delta
+                                    if delta_content.parts and hasattr(delta_content.parts[0], 'text'):
+                                        facilitator_response_content_full += delta_content.parts[0].text
+                                        print(f"DEBUG: Facilitator streaming: {delta_content.parts[0].text}")
                                 
-                            except ValueError as ve:
-                                print(f"ERROR: Facilitator response is not valid JSON or parsing failed: {ve}")
-                                print(f"Facilitator raw response: {facilitator_response_content_full}")
-                                error_message = SYSTEM_MESSAGES.get("facilitator_json_error", "토론 진행자의 응답을 처리하는 중 오류가 발생했습니다.")
-                                discussion_messages.append({
-                                    "role": "system", "content": error_message, "avatar": "⚠️",
-                                    "speaker": "system", "speaker_name": "시스템"
-                                })
-                                self.update_discussion_history(session_id_string, "system", error_message)
-                                continue
+                                # 최종 응답 처리
+                                if event.is_final_response() if hasattr(event, 'is_final_response') else False:
+                                    if event_actions and hasattr(event_actions, 'state_delta'):
+                                        state_delta = event_actions.state_delta
+                                        if state_delta and hasattr(facilitator_agent, 'output_key'):
+                                            final_response = state_delta.get(facilitator_agent.output_key)
+                                            if final_response:
+                                                facilitator_response_content_full = final_response
+                                    
+                                    if facilitator_response_content_full:
+                                        try:
+                                            parsed_facilitator_json = self._parse_facilitator_response(facilitator_response_content_full)
+                                            next_agent_str = parsed_facilitator_json.get("next_agent")
+                                            topic_for_next = parsed_facilitator_json.get("message_to_next_agent_or_topic", "")
+                                            facilitator_thinking_process = parsed_facilitator_json.get("reasoning", "")
+                                            print(f"DEBUG: Parsed facilitator response - next_agent: {next_agent_str}, topic_for_next: {topic_for_next}")
+                                            
+                                            facilitator_display_content = f"{facilitator_thinking_process}\n\n다음 토론 주제: {topic_for_next}\n다음 발언자: {self.agent_name_map.get(next_agent_str, next_agent_str)}"
+                                            facilitator_message = {
+                                                "role": "assistant", "content": facilitator_display_content,
+                                                "avatar": self.agent_to_avatar_map["facilitator"], "speaker": "facilitator",
+                                                "speaker_name": self.agent_name_map["facilitator"]
+                                            }
+                                            if persona_first_appearance["facilitator"]:
+                                                intro_message = SYSTEM_MESSAGES.get(self.persona_intro_key_map["facilitator"], "")
+                                                discussion_messages.append({
+                                                    "role": "system", "content": intro_message,
+                                                    "avatar": self.agent_to_avatar_map["facilitator"], "speaker": "facilitator",
+                                                    "speaker_name": self.agent_name_map["facilitator"]
+                                                })
+                                                persona_first_appearance["facilitator"] = False
+                                            discussion_messages.append(facilitator_message)
+                                            self.update_discussion_history(session_id_string, "facilitator", facilitator_display_content)
+                                            break
+                                            
+                                        except ValueError as ve:
+                                            print(f"ERROR: Facilitator response is not valid JSON or parsing failed: {ve}")
+                                            print(f"Facilitator raw response: {facilitator_response_content_full}")
+                                            if retry_count < max_retries - 1:
+                                                print(f"Retrying... (Attempt {retry_count + 1}/{max_retries})")
+                                                retry_count += 1
+                                                await asyncio.sleep(2)
+                                                continue
+                                            error_message = SYSTEM_MESSAGES.get("facilitator_json_error", "토론 진행자의 응답을 처리하는 중 오류가 발생했습니다.")
+                                            discussion_messages.append({
+                                                "role": "system", "content": error_message, "avatar": "⚠️",
+                                                "speaker": "system", "speaker_name": "시스템"
+                                            })
+                                            self.update_discussion_history(session_id_string, "system", error_message)
+                                            break
                             
-                            break
-                        
-                        elif event.parts:
-                            facilitator_response_content_part = event.parts[0].text
-                            facilitator_response_content_full += facilitator_response_content_part
-                            print(f"DEBUG: Facilitator streaming: {facilitator_response_content_part}")
-
-                    if not next_agent_str:
-                        print("ERROR: Facilitator did not provide a response or next agent after stream.")
-                        error_message = SYSTEM_MESSAGES.get("facilitator_no_response_error", "토론 진행자로부터 응답을 받지 못했습니다.")
-                        discussion_messages.append({
-                            "role": "system", "content": error_message, "avatar": "⚠️",
-                            "speaker": "system", "speaker_name": "시스템"
-                        })
-                        self.update_discussion_history(session_id_string, "system", error_message)
-                        continue
+                            if facilitator_response_content_full and parsed_facilitator_json:
+                                break
+                            
+                            retry_count += 1
+                            if retry_count < max_retries:
+                                print(f"WARNING: No complete response received, retrying... (Attempt {retry_count + 1}/{max_retries})")
+                                await asyncio.sleep(2)
+                            
+                        except Exception as e:
+                            print(f"ERROR during facilitator response processing: {e}")
+                            retry_count += 1
+                            if retry_count < max_retries:
+                                print(f"Retrying due to error... (Attempt {retry_count + 1}/{max_retries})")
+                                await asyncio.sleep(2)
+                            else:
+                                raise
+                    
+                    if not facilitator_response_content_full or not parsed_facilitator_json:
+                        raise ValueError("No valid facilitator response received after maximum retries")
                 
                 except Exception as e:
                     print(f"ERROR: Error during facilitator agent execution: {e}")
@@ -301,39 +337,76 @@ class DiscussionController:
                     )
                     
                     persona_response_content_full = ""
-                    async for event_persona in event_stream_persona:
-                        if event_persona.is_final_response() if hasattr(event_persona, 'is_final_response') else False:
-                            persona_response_content = event_persona.parts[0].text.strip()
-                            persona_response_content_full += persona_response_content
-                            print(f"DEBUG: Persona agent ({next_agent_str}) final response part: {persona_response_content}")
+                    max_retries = 3
+                    retry_count = 0
+                    
+                    while retry_count < max_retries:
+                        try:
+                            async for event_persona in event_stream_persona:
+                                event_actions = getattr(event_persona, 'actions', None)
+                                
+                                # 스트리밍 텍스트 처리
+                                if (event_actions and 
+                                    hasattr(event_actions, 'content_delta') and 
+                                    event_actions.content_delta and 
+                                    hasattr(event_actions.content_delta, 'parts')):
+                                    delta_content = event_actions.content_delta
+                                    if delta_content.parts and hasattr(delta_content.parts[0], 'text'):
+                                        persona_response_content_full += delta_content.parts[0].text
+                                        print(f"DEBUG: Persona agent ({next_agent_str}) streaming: {delta_content.parts[0].text}")
+                                
+                                # 최종 응답 처리
+                                if event_persona.is_final_response() if hasattr(event_persona, 'is_final_response') else False:
+                                    if event_actions and hasattr(event_actions, 'state_delta'):
+                                        state_delta = event_actions.state_delta
+                                        if state_delta and hasattr(persona_agent, 'output_key'):
+                                            final_response = state_delta.get(persona_agent.output_key)
+                                            if final_response:
+                                                persona_response_content_full = final_response
+                                                print(f"DEBUG: Found response for key: {persona_agent.output_key}")
+                                    
+                                    if persona_response_content_full:
+                                        print(f"DEBUG: Persona agent ({next_agent_str}) final response: {persona_response_content_full}")
+                                        
+                                        persona_message = {
+                                            "role": "assistant", "content": persona_response_content_full,
+                                            "avatar": self.agent_to_avatar_map[next_agent_str],
+                                            "speaker": next_agent_str,
+                                            "speaker_name": self.agent_name_map[next_agent_str]
+                                        }
+                                        if persona_first_appearance[next_agent_str]:
+                                            intro_key = self.persona_intro_key_map.get(next_agent_str)
+                                            if intro_key:
+                                                intro_message = SYSTEM_MESSAGES.get(intro_key, "")
+                                                discussion_messages.append({
+                                                    "role": "system", "content": intro_message,
+                                                    "avatar": self.agent_to_avatar_map[next_agent_str], "speaker": next_agent_str,
+                                                    "speaker_name": self.agent_name_map[next_agent_str]
+                                                })
+                                            persona_first_appearance[next_agent_str] = False
+                                        discussion_messages.append(persona_message)
+                                        self.update_discussion_history(session_id_string, next_agent_str, persona_response_content_full)
+                                        break
                             
-                            persona_message = {
-                                "role": "assistant", "content": persona_response_content_full,
-                                "avatar": self.agent_to_avatar_map[next_agent_str],
-                                "speaker": next_agent_str,
-                                "speaker_name": self.agent_name_map[next_agent_str]
-                            }
-                            if persona_first_appearance[next_agent_str]:
-                                intro_key = self.persona_intro_key_map.get(next_agent_str)
-                                if intro_key:
-                                    intro_message = SYSTEM_MESSAGES.get(intro_key, "")
-                                    discussion_messages.append({
-                                        "role": "system", "content": intro_message,
-                                        "avatar": self.agent_to_avatar_map[next_agent_str], "speaker": next_agent_str,
-                                        "speaker_name": self.agent_name_map[next_agent_str]
-                                    })
-                                persona_first_appearance[next_agent_str] = False
-                            discussion_messages.append(persona_message)
-                            self.update_discussion_history(session_id_string, next_agent_str, persona_response_content_full)
-                            break
-                        
-                        elif event_persona.parts:
-                            persona_response_content_part = event_persona.parts[0].text
-                            persona_response_content_full += persona_response_content_part
-                            print(f"DEBUG: Persona agent ({next_agent_str}) streaming: {persona_response_content_part}")
+                            if persona_response_content_full:
+                                break
+                            
+                            retry_count += 1
+                            if retry_count < max_retries:
+                                print(f"WARNING: No response received from persona agent ({next_agent_str}), retrying... (Attempt {retry_count + 1}/{max_retries})")
+                                await asyncio.sleep(2)
+                            
+                        except Exception as e:
+                            print(f"ERROR during persona agent ({next_agent_str}) response processing: {e}")
+                            retry_count += 1
+                            if retry_count < max_retries:
+                                print(f"Retrying due to error... (Attempt {retry_count + 1}/{max_retries})")
+                                await asyncio.sleep(2)
+                            else:
+                                raise
                     
                     if not persona_response_content_full:
-                        print(f"WARNING: Persona agent ({next_agent_str}) did not provide a response.")
+                        print(f"WARNING: Persona agent ({next_agent_str}) did not provide a response after {max_retries} attempts.")
                         no_response_message = SYSTEM_MESSAGES.get("persona_no_response_warning", f"{self.agent_name_map.get(next_agent_str, next_agent_str)}로부터 응답을 받지 못했습니다.")
                         discussion_messages.append({
                             "role": "system", "content": no_response_message, "avatar": "⚠️",
@@ -462,4 +535,40 @@ class DiscussionController:
                 "speaker_name": "시스템"
             })
         
-        return final_summary_messages 
+        return final_summary_messages
+
+    def _parse_facilitator_response(self, response_text: str) -> dict:
+        """
+        퍼실리테이터의 응답을 파싱하여 JSON 객체로 변환합니다.
+        
+        Args:
+            response_text (str): 파싱할 JSON 문자열
+            
+        Returns:
+            dict: 파싱된 JSON 객체
+            
+        Raises:
+            ValueError: JSON 파싱에 실패한 경우
+        """
+        try:
+            # 응답에서 JSON 부분을 추출하기 위한 전처리
+            # 응답 텍스트에서 처음 나오는 { 부터 마지막 } 까지를 찾아서 파싱
+            start_idx = response_text.find('{')
+            end_idx = response_text.rfind('}')
+            
+            if start_idx == -1 or end_idx == -1:
+                raise ValueError("JSON 형식의 응답을 찾을 수 없습니다.")
+                
+            json_str = response_text[start_idx:end_idx + 1]
+            parsed_json = json.loads(json_str)
+            
+            # 필수 필드 검증
+            if "next_agent" not in parsed_json:
+                raise ValueError("next_agent 필드가 없습니다.")
+                
+            return parsed_json
+            
+        except json.JSONDecodeError as e:
+            raise ValueError(f"JSON 파싱 실패: {str(e)}")
+        except Exception as e:
+            raise ValueError(f"응답 파싱 중 오류 발생: {str(e)}") 

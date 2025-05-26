@@ -261,3 +261,52 @@ class SessionManager:
         except Exception as e:
             logger.exception(f"SessionManager: Error appending phase2 transition event for session ID '{session_id_for_log}'")
             return False
+
+    def debug_session_service_state(self) -> Dict[str, Any]:
+        """
+        디버깅을 위한 세션 서비스 상태 검사 메서드
+        
+        Returns:
+            Dict[str, Any]: 세션 서비스의 현재 상태 정보
+        """
+        debug_info = {
+            "session_service_type": type(self.session_service).__name__,
+            "session_service_id": id(self.session_service),
+            "app_name": self.app_name,
+            "user_id": self.user_id,
+            "active_sessions": self.active_sessions.copy(),
+            "available_session_keys": []
+        }
+        
+        try:
+            # InMemorySessionService의 내부 세션 저장소 확인
+            session_service = self.session_service
+            
+            if hasattr(session_service, 'sessions'):
+                debug_info["available_session_keys"] = list(session_service.sessions.keys())
+                debug_info["total_stored_sessions"] = len(session_service.sessions)
+            elif hasattr(session_service, '_sessions'):
+                debug_info["available_session_keys"] = list(session_service._sessions.keys())
+                debug_info["total_stored_sessions"] = len(session_service._sessions)
+            else:
+                # 다른 가능한 속성들 탐색
+                attrs = [attr for attr in dir(session_service) if not attr.startswith('__')]
+                session_attrs = [attr for attr in attrs if 'session' in attr.lower()]
+                debug_info["session_related_attributes"] = session_attrs
+                
+                for attr in session_attrs:
+                    try:
+                        attr_value = getattr(session_service, attr)
+                        if hasattr(attr_value, 'keys'):
+                            debug_info[f"{attr}_keys"] = list(attr_value.keys())
+                        elif hasattr(attr_value, '__len__'):
+                            debug_info[f"{attr}_length"] = len(attr_value)
+                        else:
+                            debug_info[f"{attr}_type"] = type(attr_value).__name__
+                    except Exception as e:
+                        debug_info[f"{attr}_error"] = str(e)
+            
+        except Exception as e:
+            debug_info["debug_error"] = str(e)
+        
+        return debug_info

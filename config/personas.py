@@ -6,6 +6,9 @@ AIdea Lab AI 페르소나 설정
 from enum import Enum
 from config.models import DEFAULT_MODEL
 
+# 현재 선택된 모델 (전역 변수, UI에서 변경 가능)
+SELECTED_MODEL = DEFAULT_MODEL.value
+
 # 페르소나 유형 정의
 class PersonaType(Enum):
     CRITIC = "critic"        # 비판적 분석가

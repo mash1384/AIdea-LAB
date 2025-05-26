@@ -15,7 +15,9 @@ aidea-lab/
 │   ├── orchestrator/         # 오케스트레이터 에이전트 클래스
 │   │   └── main_orchestrator.py # 메인 오케스트레이터
 │   ├── ui/                   # 사용자 인터페이스 코드
-│   │   └── app.py            # Streamlit 기반 UI 애플리케이션
+│   │   ├── app.py            # Streamlit 기반 UI 애플리케이션
+│   │   ├── state_manager.py  # 세션 상태 관리 모듈
+│   │   └── adk_controller.py # ADK 연동 로직 캡슐화 모듈
 │   └── poc/                  # 개념 증명 (Proof of Concept) 코드
 │       ├── simple_adk_agent.py      # 기본 ADK Agent 테스트
 │       └── session_state_test_agent.py  # ADK session.state 테스트
@@ -77,55 +79,76 @@ aidea-lab/
   - `get_agent()`: 초기화된 Agent 객체를 반환합니다.
   - `get_output_key()`: 에이전트 응답이 세션 상태에 저장될 키를 반환합니다.
 
-### 4. src/ui/app.py
+### 4. src/ui/state_manager.py
 
-Streamlit을 사용한 웹 기반 사용자 인터페이스를 구현한 파일입니다. 사용자가 아이디어를 입력하고 분석 결과를 확인할 수 있는 UI를 제공합니다.
+* **`state_manager.py`** *(1.1단계에서 새로 추가, 1.2단계에서 강화)*:
+  * Streamlit 애플리케이션의 상태 관리를 전담하는 모듈
+  * `AppStateManager` 클래스를 통해 모든 세션 상태 관리 기능을 캡슐화
+  * 주요 구성 요소:
+    - `SYSTEM_MESSAGES` 딕셔너리: 사용자 안내 메시지 템플릿 중앙화 관리
+    - `AppStateManager` 클래스: 정적 메서드를 통한 일관된 상태 접근 인터페이스 제공
+      - 1.1단계 메서드들:
+        - `initialize_session_state()`: 세션 초기화 및 기본값 설정
+        - `add_message()`, `show_system_message()`: 채팅 메시지 관리
+        - `change_analysis_phase()`: 분석 단계 전환 관리
+        - `submit_idea()`, `start_phase2_discussion()`: 사용자 액션 처리
+        - `get_state()`, `set_state()`: 범용 상태 접근자
+      - 1.2단계 추가 메서드들 (29개):
+        - 세션 관리: `get_session_manager()`, `get_selected_model()`
+        - 아이디어 관리: `get_current_idea()`, `set_current_idea()`, `get_analyzed_idea()`, `set_analyzed_idea()`
+        - 분석 단계 관리: `get_analysis_phase()`, `get_adk_session_id()`, `set_adk_session_id()`
+        - 사용자 정보 관리: `get_user_goal()`, `set_user_goal()`, `get_user_constraints()`, `set_user_constraints()`, `get_user_values()`, `set_user_values()`
+        - UI 상태 관리: `get_messages()`, `get_show_additional_info()`, `get_expander_state()`
+        - 2단계 토론 관리: `is_awaiting_user_input_phase2()`, `set_awaiting_user_input_phase2()`, `get_phase2_user_prompt()`, `set_phase2_user_prompt()` 등
+        - 입력 값 접근: `get_input_value()` (Streamlit 위젯 값 안전 접근)
+    - 호환성 전역 함수들: 기존 코드와의 호환성을 위한 래퍼 함수 제공
+  * 장점:
+    - 상태 관리 로직의 중앙화로 일관성 보장
+    - `st.session_state` 접근의 완전한 캡슐화 (1.2단계)
+    - 향후 상태 관리 기능 확장 시 유지보수성 향상
+    - UI 로직과 상태 관리 로직의 명확한 분리
+    - 상태 저장 방식 변경 시 유연성 확보
 
-- **역할**: Streamlit 기반의 사용자 인터페이스 (UI)를 제공합니다.
-- **아키텍처**:
-    - 사용자가 아이디어를 입력하고 분석을 요청하는 웹 애플리케이션의 진입점입니다.
-    - `AIdeaLabOrchestrator`를 호출하여 아이디어 분석 프로세스를 시작합니다.
-    - 챗봇 인터페이스로 구현되어 사용자와 AI 페르소나 간의 자연스러운 대화 흐름을 제공합니다.
-    - 주요 구성 요소:
-        - **챗봇 UI 레이아웃**: `st.set_page_config(layout="centered")`를 사용한 중앙 정렬 레이아웃
-        - **채팅 메시지 표시**: `st.chat_message()`와 `st.container()`를 사용하여 사용자와 AI 응답을 대화 형태로 표시
-        - **채팅 입력**: `st.chat_input()`을 사용하여 사용자 아이디어 입력 수집
-        - **세션 상태 관리**: `initialize_session_state()` 함수를 통한 체계적인 상태 관리
-            - `messages`: 전체 대화 히스토리 저장 리스트
-            - `current_idea`: 사용자가 입력한 아이디어
-            - `analysis_phase`: 현재 분석 단계 추적 (idle, phase1_running, phase1_complete 등)
-            - `phase1_step`: 1단계 분석의 세부 진행 상태 관리 ("awaiting_idea", "idea_submitted", "analysis_started", "marketer_analyzing" 등)
-            - `user_goal`, `user_constraints`, `user_values`: 사용자 추가 정보 저장
-            - `need_rerun`: UI 갱신 제어를 위한 플래그
-        - **시스템 메시지 관리**: `SYSTEM_MESSAGES` 딕셔너리와 `show_system_message()` 함수를 통한 일관된 안내 메시지 표시
-            - 환영 메시지, 분석 시작 안내, 각 페르소나 소개, 단계 완료 안내 등 다양한 메시지 정의
-        - **분석 흐름 관리**: `run_phase1_analysis_and_update_ui()` 함수를 통한 분석 실행 및 UI 업데이트 통합
-            - 상태 기반 메시지 표시 흐름: 아이디어 입력 → 분석 시작 안내 → 페르소나 소개 → 결과 표시 → 완료 안내
-            - 페르소나 분석 결과를 한 번에 수집한 후 UI 갱신 최소화로 스크롤 문제 방지
-            - 비동기 처리를 위한 `_run_phase1_analysis()` 보조 함수 활용
-        - **스크롤 관리 최적화**:
-            - 분석 중 스크롤 강제 이동 방지를 위한 UI 갱신 최소화
-            - 이벤트 스트림에서 중간 결과 건너뛰고 최종 결과만 처리
-            - 모든 결과를 먼저 수집한 후 한 번에 UI 갱신
-        - **사용자 설정 관리**:
-            - 고급 설정 expander를 통한 추가 옵션 제공
-            - Streamlit 자체 상태 관리 활용하여 expander 상태 유지
-            - `update_setting()` 함수를 통한 간단하고 명확한 설정 상태 관리
-    - 각 페르소나의 분석 결과를 순차적으로 챗봇 UI에 표시합니다.
-    - 1단계 분석 완료 후 2단계 진행 선택을 위한 버튼 UI를 제공합니다.
-    - `asyncio`를 사용하여 백엔드 로직(에이전트 실행)을 비동기적으로 처리하여 UI 반응성을 유지합니다.
-    - **모델 선택 기능**:
-        - "고급 설정" expander 내에 모델 선택 드롭다운 UI 제공
-        - 선택된 모델의 정보 표시 및 변경 적용 기능
-        - 아이디어 분석 요청 시 선택된 모델 자동 적용
-    - **실시간 스트리밍 기능**:
-        - `stream_text()` 함수: 텍스트를 단어 단위로 스트리밍하는 제너레이터 함수
-        - `st.write_stream()`과 결합하여 자연스러운 타이핑 효과 제공
-        - `asyncio.sleep()`을 통한 페르소나 응답 간 전환 지연으로 사용자 경험 개선
-        - 비동기 이벤트 처리를 통한 실시간 UI 업데이트
-        - `processed_agents` 집합을 사용한 이벤트 중복 처리 방지
-        - 각 페르소나 타입별 맞춤 처리 로직 (`marketer`, `critic`, `engineer`, `summary` 각각에 대한 조건부 처리)
-        - `placeholder = st.empty()`와 `with placeholder.container()`를 활용한 효율적인 UI 업데이트
+* **`adk_controller.py`** *(1.3단계에서 새로 추가)*:
+  * Google ADK와의 연동 로직을 캡슐화하는 전담 모듈 (376줄)
+  * `AdkController` 클래스를 통해 모든 ADK 상호작용을 중앙화
+  * 주요 구성 요소:
+    - `AdkController` 클래스: ADK 실행의 모든 세부사항 캡슐화
+      - `__init__(session_manager)`: SessionManager 인스턴스를 의존성으로 받아 초기화
+      - `execute_phase1_workflow()`: 1단계 분석 워크플로우 완전 관리
+        * 오케스트레이터에서 출력 키 정보 가져오기
+        * Runner 생성 및 이벤트 스트림 처리
+        * 응답 검증 및 UI 메시지 구조 생성
+      - `execute_phase2_facilitator()`: 2단계 토론 퍼실리테이터 실행
+      - `execute_phase2_persona()`: 2단계 토론 페르소나 에이전트 실행
+      - `_validate_agent_response()`: 응답 검증 및 대체 응답 생성
+        * 기본 유효성 검사 (길이, 타입, 내용)
+        * 요약 응답 형식 검증 (핵심 포인트, 종합 요약 포함 여부)
+        * 실패 시 구조화된 대체 응답 자동 생성
+      - `_process_response()`: 응답 처리 및 세션 상태 업데이트
+      - `handle_adk_error()`: ADK 오류를 사용자 친화적 메시지로 변환
+        * API 키, 네트워크, 할당량, 타임아웃 등 구체적 오류 유형별 처리
+  * 아키텍처적 장점:
+    - UI 코드(`app.py`)에서 약 200줄의 복잡한 ADK 로직 완전 제거
+    - 응답 검증, 오류 처리, 이벤트 스트림 처리 등의 로직 완전 캡슐화
+    - UI 코드가 ADK 실행의 세부사항을 직접 알 필요 없어짐
+    - 모든 ADK 관련 상호작용이 단일 지점을 통해 중앙화됨
+    - 향후 ADK 관련 기능 확장 및 유지보수 용이성 대폭 향상
+    - 테스트 가능성 향상 (ADK 로직과 UI 로직의 완전한 분리)
+
+* **`app.py`**: 
+  * Streamlit 기반 사용자 인터페이스 제공
+  * 챗봇 형태의 대화형 UI 구현
+  * 아이디어 입력 및 분석 요청 처리
+  * 세션 상태 관리 및 AI 페르소나 응답 표시
+  * 시스템 안내 메시지 관리를 위한 `SYSTEM_MESSAGES` 정의 및 `show_system_message()` 함수 구현
+  * 사용자 추가 정보(핵심 목표, 제약 조건, 중요 가치) 입력 및 관리
+  * 비동기 분석 실행 및 스트리밍 응답 처리
+  * *(1.3단계 수정사항)*: AdkController 사용으로 인한 대폭 간소화
+    - 기존 `_run_phase1_analysis` 함수 완전 제거
+    - `run_phase1_analysis_and_update_ui` 함수에서 AdkController 활용
+    - ADK 오류 처리에서 AdkController의 `handle_adk_error` 메서드 사용
+    - UI 로직과 ADK 로직의 완전한 분리 달성
 
 ### 5. src/poc/simple_adk_agent.py
 
@@ -326,6 +349,61 @@ Phase 1에서는 단일 페르소나 에이전트만 구현했지만, 다중 페
 
 #### UI 모듈 (`src/ui/`)
 
+* **`state_manager.py`** *(1.1단계에서 새로 추가, 1.2단계에서 강화)*:
+  * Streamlit 애플리케이션의 상태 관리를 전담하는 모듈
+  * `AppStateManager` 클래스를 통해 모든 세션 상태 관리 기능을 캡슐화
+  * 주요 구성 요소:
+    - `SYSTEM_MESSAGES` 딕셔너리: 사용자 안내 메시지 템플릿 중앙화 관리
+    - `AppStateManager` 클래스: 정적 메서드를 통한 일관된 상태 접근 인터페이스 제공
+      - 1.1단계 메서드들:
+        - `initialize_session_state()`: 세션 초기화 및 기본값 설정
+        - `add_message()`, `show_system_message()`: 채팅 메시지 관리
+        - `change_analysis_phase()`: 분석 단계 전환 관리
+        - `submit_idea()`, `start_phase2_discussion()`: 사용자 액션 처리
+        - `get_state()`, `set_state()`: 범용 상태 접근자
+      - 1.2단계 추가 메서드들 (29개):
+        - 세션 관리: `get_session_manager()`, `get_selected_model()`
+        - 아이디어 관리: `get_current_idea()`, `set_current_idea()`, `get_analyzed_idea()`, `set_analyzed_idea()`
+        - 분석 단계 관리: `get_analysis_phase()`, `get_adk_session_id()`, `set_adk_session_id()`
+        - 사용자 정보 관리: `get_user_goal()`, `set_user_goal()`, `get_user_constraints()`, `set_user_constraints()`, `get_user_values()`, `set_user_values()`
+        - UI 상태 관리: `get_messages()`, `get_show_additional_info()`, `get_expander_state()`
+        - 2단계 토론 관리: `is_awaiting_user_input_phase2()`, `set_awaiting_user_input_phase2()`, `get_phase2_user_prompt()`, `set_phase2_user_prompt()` 등
+        - 입력 값 접근: `get_input_value()` (Streamlit 위젯 값 안전 접근)
+    - 호환성 전역 함수들: 기존 코드와의 호환성을 위한 래퍼 함수 제공
+  * 장점:
+    - 상태 관리 로직의 중앙화로 일관성 보장
+    - `st.session_state` 접근의 완전한 캡슐화 (1.2단계)
+    - 향후 상태 관리 기능 확장 시 유지보수성 향상
+    - UI 로직과 상태 관리 로직의 명확한 분리
+    - 상태 저장 방식 변경 시 유연성 확보
+
+* **`adk_controller.py`** *(1.3단계에서 새로 추가)*:
+  * Google ADK와의 연동 로직을 캡슐화하는 전담 모듈 (376줄)
+  * `AdkController` 클래스를 통해 모든 ADK 상호작용을 중앙화
+  * 주요 구성 요소:
+    - `AdkController` 클래스: ADK 실행의 모든 세부사항 캡슐화
+      - `__init__(session_manager)`: SessionManager 인스턴스를 의존성으로 받아 초기화
+      - `execute_phase1_workflow()`: 1단계 분석 워크플로우 완전 관리
+        * 오케스트레이터에서 출력 키 정보 가져오기
+        * Runner 생성 및 이벤트 스트림 처리
+        * 응답 검증 및 UI 메시지 구조 생성
+      - `execute_phase2_facilitator()`: 2단계 토론 퍼실리테이터 실행
+      - `execute_phase2_persona()`: 2단계 토론 페르소나 에이전트 실행
+      - `_validate_agent_response()`: 응답 검증 및 대체 응답 생성
+        * 기본 유효성 검사 (길이, 타입, 내용)
+        * 요약 응답 형식 검증 (핵심 포인트, 종합 요약 포함 여부)
+        * 실패 시 구조화된 대체 응답 자동 생성
+      - `_process_response()`: 응답 처리 및 세션 상태 업데이트
+      - `handle_adk_error()`: ADK 오류를 사용자 친화적 메시지로 변환
+        * API 키, 네트워크, 할당량, 타임아웃 등 구체적 오류 유형별 처리
+  * 아키텍처적 장점:
+    - UI 코드(`app.py`)에서 약 200줄의 복잡한 ADK 로직 완전 제거
+    - 응답 검증, 오류 처리, 이벤트 스트림 처리 등의 로직 완전 캡슐화
+    - UI 코드가 ADK 실행의 세부사항을 직접 알 필요 없어짐
+    - 모든 ADK 관련 상호작용이 단일 지점을 통해 중앙화됨
+    - 향후 ADK 관련 기능 확장 및 유지보수 용이성 대폭 향상
+    - 테스트 가능성 향상 (ADK 로직과 UI 로직의 완전한 분리)
+
 * **`app.py`**: 
   * Streamlit 기반 사용자 인터페이스 제공
   * 챗봇 형태의 대화형 UI 구현
@@ -334,6 +412,11 @@ Phase 1에서는 단일 페르소나 에이전트만 구현했지만, 다중 페
   * 시스템 안내 메시지 관리를 위한 `SYSTEM_MESSAGES` 정의 및 `show_system_message()` 함수 구현
   * 사용자 추가 정보(핵심 목표, 제약 조건, 중요 가치) 입력 및 관리
   * 비동기 분석 실행 및 스트리밍 응답 처리
+  * *(1.3단계 수정사항)*: AdkController 사용으로 인한 대폭 간소화
+    - 기존 `_run_phase1_analysis` 함수 완전 제거
+    - `run_phase1_analysis_and_update_ui` 함수에서 AdkController 활용
+    - ADK 오류 처리에서 AdkController의 `handle_adk_error` 메서드 사용
+    - UI 로직과 ADK 로직의 완전한 분리 달성
 
 #### 설정 모듈 (`config/`)
 
@@ -400,7 +483,7 @@ Phase 1에서는 단일 페르소나 에이전트만 구현했지만, 다중 페
 
 토론 퍼실리테이터 에이전트를 구현한 클래스 파일입니다. Google ADK의 Agent 클래스를 기반으로 토론을 주도하고 다음 발언자를 결정하는 역할을 담당합니다.
 
-- **역할**: 2단계 토론을 조율하고 다음 발언자와 토론 주제를 결정하는 퍼실리테이터 역할을 수행합니다.
+- **역할**: 2단계 토론을 조율하고 다음 발언자를 결정하는 퍼실리테이터 역할을 수행합니다.
 - **아키텍처**:
   - `DiscussionFacilitatorAgent` 클래스: 토론 퍼실리테이터 역할을 담당하는 클래스
     - `__init__()`: 모델 이름과 동적 프롬프트 생성 함수를 인자로 받아 에이전트 초기화
@@ -467,7 +550,7 @@ AIdeaLabOrchestrator 클래스에 추가된 2단계 토론 관련 메서드들�
   - **동작**: 페르소나 유형(MARKETER, CRITIC, ENGINEER)에 따라 해당 2단계 프롬프트 제공자 함수를 사용하여 에이전트 생성
 
 - **get_phase2_final_summary_agent()**: 2단계 토론 최종 요약 에이전트를 생성하고 반환하는 메서드
-  - **역할**: 2단계 토론이 종료된 후 최종 결과를 요약할 에이전트 생성
+  - **역할**: 2단계 토론이 종료된 후 최종 요약 에이전트를 생성
   - **동작**: `FINAL_SUMMARY_PHASE2_PROMPT_PROVIDER` 함수를 instruction으로 사용하여 최종 요약 에이전트 생성
 
 ## Phase 2 데이터 흐름
@@ -584,7 +667,7 @@ sequenceDiagram
    - 빈 메시지로 퍼실리테이터 에이전트 실행 (세션 상태를 직접 참조)
    - 응답에서 정규 표현식으로 JSON 부분 추출 및 파싱
    - `next_agent`와 `message_to_next_agent_or_topic` 값 추출
-   - 토론 히스토리에 퍼실리테이터 발언 추가
+   - 퍼실리테이터의 응답과 결정이 `state["discussion_history_phase2"]`에 기록됩니다.
 
 3. **라우팅 처리**:
    - **페르소나 에이전트 호출 시**:

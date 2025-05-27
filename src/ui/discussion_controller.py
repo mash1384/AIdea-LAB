@@ -286,7 +286,7 @@ class DiscussionController:
                     AppStateManager.set_phase2_user_prompt(SYSTEM_MESSAGES.get("user_input_prompt_facilitator_choice", "진행자가 다음 토론자를 지정하지 않았습니다. 직접 토론을 이어가시겠습니까, 아니면 다른 주제로 넘어갈까요?"))
                     return discussion_messages, "사용자 입력 대기", AppStateManager.get_phase2_user_prompt()
                 
-                if next_agent_str == "user":
+                if next_agent_str.upper() == "USER":
                     print("INFO: Facilitator requests user input.")
                     AppStateManager.set_awaiting_user_input_phase2(True)
                     user_prompt = topic_for_next if topic_for_next else SYSTEM_MESSAGES.get("user_input_prompt_general", "다음 의견을 말씀해주십시오.")

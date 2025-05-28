@@ -7,10 +7,14 @@ AIdea Lab Discussion Controller Module
 
 import asyncio
 import json
+import re
+import logging
 from google.adk.runners import Runner
 from google.genai import types
 from src.ui.state_manager import AppStateManager, SYSTEM_MESSAGES
 from config.personas import PersonaType
+from datetime import datetime
+import time
 
 
 class DiscussionController:
@@ -60,7 +64,8 @@ class DiscussionController:
     
     def update_discussion_history(self, session_id: str, speaker: str, content: str):
         """
-        토론 히스토리를 업데이트합니다.
+        Phase 2 토론 기록을 업데이트합니다.
+        SessionManager의 update_session_state와 일관된 이벤트 기반 방식을 사용합니다.
         
         Args:
             session_id (str): 세션 ID
@@ -70,22 +75,31 @@ class DiscussionController:
         try:
             session = self.session_manager.get_session(session_id)
             if session:
-                # discussion_history_phase2 가져오기
-                discussion_history = session.state.get("discussion_history_phase2", [])
+                # 현재 토론 기록 가져오기
+                current_discussion_history = session.state.get("discussion_history_phase2", [])
                 
                 # 새 항목 추가
-                discussion_history.append({
+                new_entry = {
                     "speaker": speaker,
-                    "content": content
-                })
+                    "content": content,
+                    "timestamp": datetime.now().isoformat()  # 타임스탬프 추가
+                }
+                updated_discussion_history = current_discussion_history + [new_entry]
                 
-                # 세션 상태 업데이트
-                session.state["discussion_history_phase2"] = discussion_history
-                print(f"DEBUG: Updated discussion history for session {session_id}, speaker: {speaker}")
+                # SessionManager의 이벤트 기반 상태 업데이트 사용
+                state_updates = {
+                    "discussion_history_phase2": updated_discussion_history
+                }
+                
+                success = self.session_manager.update_session_state(state_updates)
+                if success:
+                    logging.info(f"DiscussionController: Successfully updated discussion history for session {session_id}, speaker: {speaker}")
+                else:
+                    logging.error(f"DiscussionController: Failed to update discussion history for session {session_id}")
             else:
-                print(f"ERROR: Could not find session {session_id} for discussion history update")
+                logging.error(f"DiscussionController: Could not find session {session_id} for discussion history update")
         except Exception as e:
-            print(f"ERROR: Failed to update discussion history: {e}")
+            logging.exception(f"DiscussionController: Failed to update discussion history: {e}")
     
     async def run_phase2_discussion(self, session_id_string: str, orchestrator):
         """
@@ -235,26 +249,53 @@ class DiscussionController:
                                         except ValueError as ve:
                                             print(f"ERROR: Facilitator response is not valid JSON or parsing failed: {ve}")
                                             print(f"Facilitator raw response: {facilitator_response_content_full}")
+                                            
+                                            # JSON 파싱 실패 시 재시도 로직
                                             if retry_count < max_retries - 1:
-                                                print(f"Retrying... (Attempt {retry_count + 1}/{max_retries})")
+                                                print(f"Retrying with JSON format correction... (Attempt {retry_count + 1}/{max_retries})")
+                                                
+                                                # 오류 상세 정보와 함께 재시도를 위한 새로운 프롬프트 생성
+                                                retry_prompt = self._create_json_retry_prompt(facilitator_response_content_full, str(ve))
+                                                
+                                                # 새로운 Runner와 이벤트 스트림 생성
+                                                retry_runner = Runner(
+                                                    agent=facilitator_agent,
+                                                    app_name=self.app_name,
+                                                    session_service=self.session_manager.session_service
+                                                )
+                                                retry_input = types.Content(role="user", parts=[types.Part(text=retry_prompt)])
+                                                event_stream = retry_runner.run_async(
+                                                    user_id=self.user_id,
+                                                    session_id=session_id_string,
+                                                    new_message=retry_input
+                                                )
+                                                
+                                                # 응답 내용 초기화 후 재시도
+                                                facilitator_response_content_full = ""
                                                 retry_count += 1
-                                                await asyncio.sleep(2)
-                                                continue
-                                            error_message = SYSTEM_MESSAGES.get("facilitator_json_error", "토론 진행자의 응답을 처리하는 중 오류가 발생했습니다.")
-                                            discussion_messages.append({
-                                                "role": "system", "content": error_message, "avatar": "⚠️",
-                                                "speaker": "system", "speaker_name": "시스템"
-                                            })
-                                            self.update_discussion_history(session_id_string, "system", error_message)
-                                            break
+                                                await asyncio.sleep(1)
+                                                break  # 내부 루프 탈출하여 다시 이벤트 스트림 처리
+                                            else:
+                                                # 최대 재시도 횟수 초과
+                                                error_message = SYSTEM_MESSAGES.get("facilitator_json_error", 
+                                                    f"토론 진행자의 응답을 처리하는 중 오류가 발생했습니다. ({max_retries}회 재시도 후 실패)")
+                                                discussion_messages.append({
+                                                    "role": "system", "content": error_message, "avatar": "⚠️",
+                                                    "speaker": "system", "speaker_name": "시스템"
+                                                })
+                                                self.update_discussion_history(session_id_string, "system", error_message)
+                                                return discussion_messages, "오류", None
                             
                             if facilitator_response_content_full and parsed_facilitator_json:
                                 break
                             
-                            retry_count += 1
-                            if retry_count < max_retries:
+                            # 완전한 응답을 받지 못한 경우에도 재시도
+                            if retry_count < max_retries - 1:
                                 print(f"WARNING: No complete response received, retrying... (Attempt {retry_count + 1}/{max_retries})")
+                                retry_count += 1
                                 await asyncio.sleep(2)
+                            else:
+                                break
                             
                         except Exception as e:
                             print(f"ERROR during facilitator response processing: {e}")
@@ -293,11 +334,11 @@ class DiscussionController:
                     AppStateManager.set_phase2_user_prompt(user_prompt)
                     return discussion_messages, "사용자 입력 대기", user_prompt
                 
-                if next_agent_str == "final_summary":
+                if next_agent_str.upper() == "FINAL_SUMMARY":
                     print("INFO: Facilitator requests final summary.")
                     final_summary_message = await self._execute_final_summary(session_id_string, orchestrator, persona_first_appearance)
                     if final_summary_message:
-                        discussion_messages.append(final_summary_message)
+                        discussion_messages.extend(final_summary_message)
                     return discussion_messages, "완료", None
 
                 persona_type_to_call = None
@@ -396,14 +437,67 @@ class DiscussionController:
                                 print(f"WARNING: No response received from persona agent ({next_agent_str}), retrying... (Attempt {retry_count + 1}/{max_retries})")
                                 await asyncio.sleep(2)
                             
-                        except Exception as e:
-                            print(f"ERROR during persona agent ({next_agent_str}) response processing: {e}")
+                        except ConnectionError as ce:
+                            print(f"ERROR: Network connection error for persona agent ({next_agent_str}): {ce}")
                             retry_count += 1
                             if retry_count < max_retries:
-                                print(f"Retrying due to error... (Attempt {retry_count + 1}/{max_retries})")
-                                await asyncio.sleep(2)
+                                print(f"Retrying due to network error... (Attempt {retry_count + 1}/{max_retries})")
+                                await asyncio.sleep(3)  # 네트워크 오류 시 더 긴 대기
                             else:
-                                raise
+                                network_error_message = SYSTEM_MESSAGES.get("network_error", 
+                                    f"네트워크 연결 문제로 {self.agent_name_map.get(next_agent_str, next_agent_str)}의 응답을 받을 수 없습니다. 잠시 후 다시 시도해주세요.")
+                                discussion_messages.append({
+                                    "role": "system", "content": network_error_message, "avatar": "🌐",
+                                    "speaker": "system", "speaker_name": "시스템"
+                                })
+                                self.update_discussion_history(session_id_string, "system", network_error_message)
+                                return discussion_messages, "네트워크 오류", None
+                        
+                        except Exception as e:
+                            print(f"ERROR during persona agent ({next_agent_str}) response processing: {e}")
+                            
+                            # HTTP 500 등 서버 오류 처리
+                            if "500" in str(e) or "Internal Server Error" in str(e):
+                                print(f"WARNING: Server error detected for persona agent ({next_agent_str}): {e}")
+                                retry_count += 1
+                                if retry_count < max_retries:
+                                    print(f"Retrying due to server error... (Attempt {retry_count + 1}/{max_retries})")
+                                    await asyncio.sleep(5)  # 서버 오류 시 더 긴 대기
+                                else:
+                                    server_error_message = SYSTEM_MESSAGES.get("server_error", 
+                                        f"서버 문제로 {self.agent_name_map.get(next_agent_str, next_agent_str)}의 응답을 받을 수 없습니다. 잠시 후 다시 시도해주세요.")
+                                    discussion_messages.append({
+                                        "role": "system", "content": server_error_message, "avatar": "⚠️",
+                                        "speaker": "system", "speaker_name": "시스템"
+                                    })
+                                    self.update_discussion_history(session_id_string, "system", server_error_message)
+                                    return discussion_messages, "서버 오류", None
+                            
+                            # API 레이트 리미트 오류 처리
+                            elif "rate limit" in str(e).lower() or "quota" in str(e).lower():
+                                print(f"WARNING: Rate limit error detected for persona agent ({next_agent_str}): {e}")
+                                retry_count += 1
+                                if retry_count < max_retries:
+                                    print(f"Retrying due to rate limit... (Attempt {retry_count + 1}/{max_retries})")
+                                    await asyncio.sleep(10)  # 레이트 리미트 시 더 긴 대기
+                                else:
+                                    rate_limit_message = SYSTEM_MESSAGES.get("rate_limit_error", 
+                                        f"API 사용량 한도로 인해 {self.agent_name_map.get(next_agent_str, next_agent_str)}의 응답을 받을 수 없습니다. 잠시 후 다시 시도해주세요.")
+                                    discussion_messages.append({
+                                        "role": "system", "content": rate_limit_message, "avatar": "⏳",
+                                        "speaker": "system", "speaker_name": "시스템"
+                                    })
+                                    self.update_discussion_history(session_id_string, "system", rate_limit_message)
+                                    return discussion_messages, "API 한도 초과", None
+                            
+                            # 기타 일반적인 오류 처리
+                            else:
+                                retry_count += 1
+                                if retry_count < max_retries:
+                                    print(f"Retrying due to generic error... (Attempt {retry_count + 1}/{max_retries})")
+                                    await asyncio.sleep(2)
+                                else:
+                                    raise
                     
                     if not persona_response_content_full:
                         print(f"WARNING: Persona agent ({next_agent_str}) did not provide a response after {max_retries} attempts.")
@@ -413,6 +507,29 @@ class DiscussionController:
                             "speaker": "system", "speaker_name": "시스템"
                         })
                         self.update_discussion_history(session_id_string, "system", no_response_message)
+                        
+                        # 대응 방안: 다른 페르소나로 토론 계속하기
+                        available_agents = ["marketer_agent", "critic_agent", "engineer_agent"]
+                        available_agents.remove(next_agent_str)  # 실패한 에이전트 제외
+                        
+                        if available_agents:
+                            fallback_message = f"토론을 계속 진행하기 위해 다른 관점에서 의견을 들어보겠습니다."
+                            discussion_messages.append({
+                                "role": "system", "content": fallback_message, "avatar": "🔄",
+                                "speaker": "system", "speaker_name": "시스템"
+                            })
+                            self.update_discussion_history(session_id_string, "system", fallback_message)
+                            # 현재 라운드는 실패했지만 토론 계속 진행
+                            continue
+                        else:
+                            # 모든 페르소나가 실패한 경우 토론 종료
+                            critical_error_message = "모든 페르소나가 응답할 수 없는 상태입니다. 토론을 안전하게 종료합니다."
+                            discussion_messages.append({
+                                "role": "system", "content": critical_error_message, "avatar": "🛑",
+                                "speaker": "system", "speaker_name": "시스템"
+                            })
+                            self.update_discussion_history(session_id_string, "system", critical_error_message)
+                            return discussion_messages, "시스템 오류로 종료", None
                 
                 except ValueError as ve:
                     print(f"ERROR: Could not get persona agent for type {persona_type_to_call}. Error: {ve}")
@@ -492,8 +609,19 @@ class DiscussionController:
                 state_delta = getattr(event_actions, 'state_delta', None) if event_actions else None
                 
                 if is_final_event and state_delta:
-                    final_summary = state_delta.get("final_summary_report_phase2", "")
-                    if final_summary and isinstance(final_summary, str):
+                    # final_summary_candidate를 통해 상세 로깅
+                    final_summary_candidate = state_delta.get("final_summary_report_phase2", "KEY_NOT_FOUND")
+                    print(f"DEBUG_SUMMARY: final_summary_candidate: {final_summary_candidate}")
+                    print(f"DEBUG_SUMMARY: type(final_summary_candidate): {type(final_summary_candidate)}")
+                    
+                    # 유효한 문자열인지 확인
+                    if (final_summary_candidate != "KEY_NOT_FOUND" and 
+                        final_summary_candidate is not None and 
+                        isinstance(final_summary_candidate, str) and 
+                        final_summary_candidate.strip()):
+                        
+                        final_summary = final_summary_candidate
+                        
                         # 최종 요약 소개 메시지 추가
                         if persona_first_appearance.get("final_summary", True):
                             intro_key = self.persona_intro_key_map.get("final_summary")
@@ -521,16 +649,37 @@ class DiscussionController:
                         self.update_discussion_history(session_id_string, "final_summary", final_summary)
                         
                         final_summary_processed = True
+                    else:
+                        # 유효하지 않은 응답인 경우 로그 및 시스템 메시지 추가
+                        print(f"ERROR_SUMMARY: Invalid final_summary_candidate received: value={final_summary_candidate}, type={type(final_summary_candidate)}")
+                        final_summary_messages.append({
+                            "role": "system",
+                            "content": "최종 요약 내용을 가져오는 데 실패했습니다.",
+                            "avatar": "⚠️",
+                            "speaker": "system",
+                            "speaker_name": "시스템"
+                        })
             
             # 최종 요약 완료 상태 설정
             AppStateManager.set_phase2_summary_complete(final_summary_processed)
             
+            # final_summary_processed가 False로 남아있는 경우 오류 메시지 추가
+            if not final_summary_processed:
+                final_summary_messages.append({
+                    "role": "system",
+                    "content": "최종 요약 생성에 실패했습니다. 에이전트로부터 유효한 응답을 받지 못했습니다.",
+                    "avatar": "⚠️",
+                    "speaker": "system",
+                    "speaker_name": "시스템"
+                })
+            
         except Exception as e:
             print(f"ERROR in _execute_final_summary: {e}")
+            final_summary_processed = False
             final_summary_messages.append({
                 "role": "system",
-                "content": f"최종 요약 생성 중 오류가 발생했습니다: {str(e)}",
-                "avatar": "ℹ️",
+                "content": "최종 요약 생성 중 오류가 발생했습니다. 관리자에게 문의하세요.",
+                "avatar": "⚠️",
                 "speaker": "system",
                 "speaker_name": "시스템"
             })
@@ -540,6 +689,7 @@ class DiscussionController:
     def _parse_facilitator_response(self, response_text: str) -> dict:
         """
         퍼실리테이터의 응답을 파싱하여 JSON 객체로 변환합니다.
+        다양한 LLM 응답 변형에 대응할 수 있도록 방어 로직을 포함합니다.
         
         Args:
             response_text (str): 파싱할 JSON 문자열
@@ -550,25 +700,168 @@ class DiscussionController:
         Raises:
             ValueError: JSON 파싱에 실패한 경우
         """
-        try:
-            # 응답에서 JSON 부분을 추출하기 위한 전처리
-            # 응답 텍스트에서 처음 나오는 { 부터 마지막 } 까지를 찾아서 파싱
-            start_idx = response_text.find('{')
-            end_idx = response_text.rfind('}')
-            
-            if start_idx == -1 or end_idx == -1:
-                raise ValueError("JSON 형식의 응답을 찾을 수 없습니다.")
+        if not response_text or not response_text.strip():
+            raise ValueError("응답 텍스트가 비어있습니다.")
+        
+        # 원본 텍스트 로깅
+        print(f"DEBUG: Raw facilitator response: {response_text}")
+        
+        # 1. 먼저 전체 텍스트에서 JSON 객체 추출 시도
+        json_candidates = []
+        
+        # 방법 1: 중괄호로 감싸진 영역 찾기 (가장 바깥쪽부터)
+        brace_count = 0
+        start_idx = -1
+        for i, char in enumerate(response_text):
+            if char == '{':
+                if brace_count == 0:
+                    start_idx = i
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+                if brace_count == 0 and start_idx != -1:
+                    json_candidates.append(response_text[start_idx:i+1])
+                    start_idx = -1
+        
+        # 방법 2: 정규식으로 JSON 패턴 찾기
+        json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
+        regex_matches = re.findall(json_pattern, response_text, re.DOTALL)
+        json_candidates.extend(regex_matches)
+        
+        # 방법 3: 마크다운 코드 블록 내부 검사
+        code_block_patterns = [
+            r'```json\s*(\{.*?\})\s*```',
+            r'```\s*(\{.*?\})\s*```',
+            r'`(\{.*?\})`'
+        ]
+        for pattern in code_block_patterns:
+            matches = re.findall(pattern, response_text, re.DOTALL)
+            json_candidates.extend(matches)
+        
+        # 방법 4: 단순히 첫 번째 { 부터 마지막 } 까지 (기존 방식)
+        start_idx = response_text.find('{')
+        end_idx = response_text.rfind('}')
+        if start_idx != -1 and end_idx != -1 and start_idx <= end_idx:
+            json_candidates.append(response_text[start_idx:end_idx + 1])
+        
+        # 후보들을 중복 제거하고 정리
+        unique_candidates = []
+        for candidate in json_candidates:
+            candidate = candidate.strip()
+            if candidate and candidate not in unique_candidates:
+                unique_candidates.append(candidate)
+        
+        print(f"DEBUG: Found {len(unique_candidates)} JSON candidates")
+        
+        # 각 후보에 대해 파싱 시도
+        parsing_errors = []
+        for i, candidate in enumerate(unique_candidates):
+            try:
+                # 텍스트 정리
+                cleaned_candidate = self._clean_json_text(candidate)
+                print(f"DEBUG: Trying candidate {i+1}: {cleaned_candidate[:100]}...")
                 
-            json_str = response_text[start_idx:end_idx + 1]
-            parsed_json = json.loads(json_str)
-            
-            # 필수 필드 검증
-            if "next_agent" not in parsed_json:
-                raise ValueError("next_agent 필드가 없습니다.")
+                parsed_json = json.loads(cleaned_candidate)
                 
-            return parsed_json
+                # 기본 구조 검증
+                if not isinstance(parsed_json, dict):
+                    raise ValueError("JSON이 객체(dict) 형태가 아닙니다.")
+                
+                # 필수 필드 검증
+                if "next_agent" not in parsed_json:
+                    raise ValueError("next_agent 필드가 없습니다.")
+                
+                # 유효한 next_agent 값인지 확인
+                valid_agents = ["marketer_agent", "critic_agent", "engineer_agent", "USER", "FINAL_SUMMARY", "final_summary"]
+                if parsed_json["next_agent"] not in valid_agents:
+                    raise ValueError(f"next_agent 값이 유효하지 않습니다: {parsed_json['next_agent']}")
+                
+                # message_to_next_agent_or_topic 필드가 없으면 빈 문자열로 설정
+                if "message_to_next_agent_or_topic" not in parsed_json:
+                    parsed_json["message_to_next_agent_or_topic"] = ""
+                
+                # reasoning 필드가 없으면 빈 문자열로 설정
+                if "reasoning" not in parsed_json:
+                    parsed_json["reasoning"] = ""
+                
+                print(f"DEBUG: Successfully parsed JSON with candidate {i+1}")
+                return parsed_json
+                
+            except json.JSONDecodeError as e:
+                error_msg = f"Candidate {i+1} JSON 파싱 실패: {str(e)}"
+                parsing_errors.append(error_msg)
+                print(f"DEBUG: {error_msg}")
+                continue
+            except ValueError as e:
+                error_msg = f"Candidate {i+1} 검증 실패: {str(e)}"
+                parsing_errors.append(error_msg)
+                print(f"DEBUG: {error_msg}")
+                continue
+            except Exception as e:
+                error_msg = f"Candidate {i+1} 예상치 못한 오류: {str(e)}"
+                parsing_errors.append(error_msg)
+                print(f"DEBUG: {error_msg}")
+                continue
+        
+        # 모든 후보가 실패한 경우
+        all_errors = "; ".join(parsing_errors)
+        raise ValueError(f"JSON 형식의 응답을 찾을 수 없습니다. 시도한 후보들의 오류: {all_errors}")
+    
+    def _clean_json_text(self, json_text: str) -> str:
+        """
+        JSON 텍스트를 정리하여 파싱 가능하도록 만듭니다.
+        
+        Args:
+            json_text (str): 정리할 JSON 텍스트
             
-        except json.JSONDecodeError as e:
-            raise ValueError(f"JSON 파싱 실패: {str(e)}")
-        except Exception as e:
-            raise ValueError(f"응답 파싱 중 오류 발생: {str(e)}") 
+        Returns:
+            str: 정리된 JSON 텍스트
+        """
+        # 앞뒤 공백 제거
+        cleaned = json_text.strip()
+        
+        # 마크다운 코드 블록 표시 제거
+        cleaned = re.sub(r'^```json\s*', '', cleaned)
+        cleaned = re.sub(r'^```\s*', '', cleaned)
+        cleaned = re.sub(r'\s*```$', '', cleaned)
+        
+        # 백틱 제거
+        cleaned = cleaned.strip('`')
+        
+        # 다시 앞뒤 공백 제거
+        cleaned = cleaned.strip()
+        
+        # 제어 문자 제거 (개행, 탭 등은 유지)
+        cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', cleaned)
+        
+        return cleaned
+    
+    def _create_json_retry_prompt(self, failed_response: str, error_message: str) -> str:
+        """
+        JSON 파싱 실패 시 재시도를 위한 프롬프트를 생성합니다.
+        
+        Args:
+            failed_response (str): 파싱에 실패한 원본 응답
+            error_message (str): 파싱 실패 오류 메시지
+            
+        Returns:
+            str: 재시도를 위한 프롬프트
+        """
+        return f"""이전 응답이 올바른 JSON 형식이 아니어서 파싱에 실패했습니다.
+
+오류 내용: {error_message}
+
+이전 응답: {failed_response[:500]}{"..." if len(failed_response) > 500 else ""}
+
+다시 응답해주세요. 반드시 다음 요구사항을 정확히 준수해야 합니다:
+
+1. 순수한 JSON 객체만 응답하세요 (다른 텍스트 절대 금지)
+2. 다음 정확한 형식을 사용하세요:
+{{"next_agent":"값","message_to_next_agent_or_topic":"값","reasoning":"값"}}
+
+3. next_agent는 다음 중 하나만 사용: marketer_agent, critic_agent, engineer_agent, USER, FINAL_SUMMARY
+
+4. 마크다운 코드 블록(```) 사용 금지
+5. 설명이나 인사말 추가 금지
+
+올바른 예시: {{"next_agent":"marketer_agent","message_to_next_agent_or_topic":"시장 분석을 부탁드립니다","reasoning":"마케팅 관점이 필요함"}}""" 

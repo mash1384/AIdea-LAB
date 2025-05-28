@@ -288,6 +288,9 @@ def handle_phase2_discussion():
                 orchestrator
             ))
             
+            # DEBUG 로그 추가: DiscussionController가 반환하는 메시지 확인
+            print(f"DEBUG_APP: Received discussion_messages from controller: {discussion_messages}")
+            
             # 각 메시지마다 새로 rerun할 필요 없이 한 번에 모든 메시지를 UI에 추가
             print(f"DEBUG: Received {len(discussion_messages)} messages from DiscussionController")
             print(f"DEBUG: Discussion status: {discussion_status}")

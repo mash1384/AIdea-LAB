@@ -88,7 +88,7 @@ class AIdeaLabOrchestrator:
         """
         # 모델별 컨텍스트 제한 설정
         MODEL_CONTEXT_LIMITS = {
-            "gemini-2.5-flash-preview-04-17": 8000,  # 프리뷰 모델은 더 짧은 컨텍스트
+            "gemini-2.5-flash-preview-04-17": 12000,  # 프리뷰 모델은 더 짧은 컨텍스트
             "gemini-2.0-flash": 12000,
             "gemini-2.5-pro-exp-03-25": 16000,
             "gemini-2.5-pro-preview-05-06": 16000
@@ -97,11 +97,37 @@ class AIdeaLabOrchestrator:
         # 현재 모델의 컨텍스트 제한 (기본값: 8000)
         current_model_limit = MODEL_CONTEXT_LIMITS.get(self.model_name, 8000)
         
-        # config/prompts.py에서 중간 요약 프롬프트를 가져옵니다.
-        from config.prompts import INTERMEDIATE_SUMMARY_PROMPT
-        
-        # 개선된 요약 프롬프트 생성
-        improved_prompt = f"""
+        # 동적 프롬프트 제공자 함수 생성
+        def intermediate_summary_prompt_provider(ctx):
+            """
+            중간 요약을 위한 동적 프롬프트 생성 함수
+            
+            Args:
+                ctx: 세션 상태 컨텍스트
+                
+            Returns:
+                str: 현재 세션 상태에 맞게 생성된 중간 요약 프롬프트
+            """
+            # 원본 보고서 내용 가져오기
+            original_report_content = ctx.state.get(original_report_key, "")
+            
+            # marketer_report_phase1에 대한 상세 로깅
+            if original_report_key == "marketer_report_phase1":
+                print(f"DEBUG_MARKETER_STATE: Original report key: '{original_report_key}'")
+                print(f"DEBUG_MARKETER_STATE: Report content type: {type(original_report_content)}")
+                print(f"DEBUG_MARKETER_STATE: Report content length: {len(original_report_content) if original_report_content else 0} chars")
+                if original_report_content:
+                    # 처음 500자와 마지막 500자 로깅
+                    first_500 = original_report_content[:500] if len(original_report_content) > 500 else original_report_content
+                    last_500 = original_report_content[-500:] if len(original_report_content) > 500 else ""
+                    print(f"DEBUG_MARKETER_STATE: First 500 chars: '{first_500}'")
+                    if last_500:
+                        print(f"DEBUG_MARKETER_STATE: Last 500 chars: '{last_500}'")
+                else:
+                    print(f"DEBUG_MARKETER_STATE: WARNING - Original report content is empty or None!")
+            
+            # 기본 요약 프롬프트 생성
+            prompt = f"""
 당신은 아이디어 워크숍의 페르소나 보고서를 요약하는 전문가입니다.
 
 아래 텍스트는 워크숍 과정에서 특정 페르소나가 작성한 상세한 보고서입니다.
@@ -111,16 +137,18 @@ class AIdeaLabOrchestrator:
 1. "**핵심 포인트:**" 제목 아래에 불릿 포인트로 5개 이내의 핵심 요점을 나열하세요.
 2. "**종합 요약:**" 제목 아래에 전체 내용을 2-3문장으로 요약하세요.
 
-요약의 총 길이는 300자 이내로 제한해주세요.
+간결하게 요약해주세요.
 
 분석할 텍스트:
-{{state.{original_report_key}}}
+{original_report_content}
 """
+            
+            return prompt
         
-        # 중간 요약 에이전트의 GenerationConfig 설정
+        # 중간 요약 에이전트의 GenerationConfig 설정 (max_output_tokens 증가)
         generate_config = types.GenerationConfig(
             temperature=0.1,  # 요약은 매우 명확하고 사실적이어야 하므로 낮은 온도 설정
-            max_output_tokens=2048,  # 요약은 비교적 짧으므로 적절한 토큰 수 설정
+            max_output_tokens=4096,  # 요약 생성을 위한 충분한 토큰 수로 증가
             top_p=0.8,  # 더 결정적인 응답을 위해 조정
             top_k=40,  # 더 결정적인 응답을 위해 조정
             candidate_count=1,  # 단일 응답만 필요
@@ -130,19 +158,38 @@ class AIdeaLabOrchestrator:
         # 페르소나 이름 추출 (예: marketer_report_phase1 -> marketer)
         persona_name = original_report_key.split("_")[0] if "_" in original_report_key else "unknown"
         
-        # 중간 요약 에이전트 생성
+        # marketer_summary_agent 생성 시 상세 로깅 추가
+        if original_report_key == "marketer_report_phase1":
+            print(f"DEBUG_MARKETER_ORCHESTRATOR: Creating intermediate summarizer agent")
+            print(f"DEBUG_MARKETER_ORCHESTRATOR: Original report key: '{original_report_key}'")
+            print(f"DEBUG_MARKETER_ORCHESTRATOR: Summary output key: '{summary_output_key}'")
+            print(f"DEBUG_MARKETER_ORCHESTRATOR: Persona name: '{persona_name}'")
+            print(f"DEBUG_MARKETER_ORCHESTRATOR: Model name: '{self.model_name}'")
+            print(f"DEBUG_MARKETER_ORCHESTRATOR: Generate config:")
+            print(f"  - temperature: {generate_config.temperature}")
+            print(f"  - max_output_tokens: {generate_config.max_output_tokens}")
+            print(f"  - top_p: {generate_config.top_p}")
+            print(f"  - top_k: {generate_config.top_k}")
+            print(f"DEBUG_MARKETER_ORCHESTRATOR: Using dynamic prompt provider for runtime state access")
+        
+        # 중간 요약 에이전트 생성 (동적 프롬프트 제공자 사용)
         intermediate_summary_agent = Agent(
             name=f"{persona_name}_summary_agent",
             model=self.model_name,
             description=f"{persona_name.capitalize()} 페르소나의 상세 보고서 중간 요약 에이전트",
-            instruction=improved_prompt,
+            instruction=intermediate_summary_prompt_provider,  # 동적 프롬프트 제공자 사용
             output_key=summary_output_key,
             generate_content_config=generate_config
         )
         
         # 디버깅 로그 출력
         print(f"Created intermediate summary agent for {persona_name} with output_key: {summary_output_key}")
-        print(f"Using prompt: {improved_prompt[:100]}...")  # 프롬프트의 첫 100자만 로깅
+        print(f"Using dynamic prompt provider for runtime state access")
+        
+        if original_report_key == "marketer_report_phase1":
+            print(f"DEBUG_MARKETER_ORCHESTRATOR: Successfully created marketer_summary_agent")
+            print(f"DEBUG_MARKETER_ORCHESTRATOR: Agent name: '{intermediate_summary_agent.name}'")
+            print(f"DEBUG_MARKETER_ORCHESTRATOR: Agent output_key: '{intermediate_summary_agent.output_key}'")
         
         return intermediate_summary_agent
     
@@ -435,7 +482,7 @@ class AIdeaLabOrchestrator:
         # 요약 에이전트의 GenerationConfig 생성
         summary_generate_config = types.GenerationConfig(
             temperature=0.3,  # 명확한 요약을 위해 낮은 온도 설정
-            max_output_tokens=7000  # 충분한 요약 내용을 위한 토큰 수 증가
+            max_output_tokens=11000  # 충분한 요약 내용을 위한 토큰 수 증가
         )
         
         # 2단계 최종 요약 에이전트 생성

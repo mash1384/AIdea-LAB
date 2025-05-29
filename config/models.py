@@ -7,23 +7,11 @@ from enum import Enum
 
 # 모델 유형 정의
 class ModelType(Enum):
-    GEMINI_2_0_FLASH = "gemini-2.0-flash"
-    GEMINI_2_5_PRO_exp_0325 = "gemini-2.5-pro-exp-03-25"
     GEMINI_2_5_FLASH_PREVIEW_0417 = "gemini-2.5-flash-preview-04-17"
     GEMINI_2_5_PRO_PREVIEW_0506 = "gemini-2.5-pro-preview-05-06"
 
 # 모델 정보 설정
 MODEL_CONFIGS = {
-    ModelType.GEMINI_2_0_FLASH: {
-        "name": "Gemini 2.0 Flash",
-        "description": "제미니 2.0 플래시 모델 - 빠른 응답을 제공하는 모델",
-        "display_name": "제미니 2.0 플래시",
-    },
-    ModelType.GEMINI_2_5_PRO_exp_0325: {
-        "name": "Gemini 2.5 Pro Preview 03-25",
-        "description": "제미니 2.5 프로 exp 03-25 버전 - 고급 추론 기능을 제공하는 모델",
-        "display_name": "제미니 2.5 프로 exp 03-25",
-    },
     ModelType.GEMINI_2_5_FLASH_PREVIEW_0417: {
         "name": "Gemini 2.5 Flash Preview 04-17",
         "description": "제미니 2.5 플래시 Preview 04-17 버전 - 개선된 성능의 빠른 응답 모델",
@@ -37,7 +25,7 @@ MODEL_CONFIGS = {
 }
 
 # 기본 모델 설정
-DEFAULT_MODEL = ModelType.GEMINI_2_0_FLASH
+DEFAULT_MODEL = ModelType.GEMINI_2_5_FLASH_PREVIEW_0417
 
 # 모델 목록을 표시 이름과 함께 반환하는 함수
 def get_model_display_options():

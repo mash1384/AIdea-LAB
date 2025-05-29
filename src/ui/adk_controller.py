@@ -268,36 +268,53 @@ class AdkController:
         Returns:
             str: 검증된 응답 텍스트 (대체 응답 포함)
         """
+        # marketer_report_phase1_summary 관련 상세 로깅 추가
+        if output_key == "marketer_report_phase1_summary":
+            print(f"DEBUG_MARKETER_SUMMARY: Starting validation for output_key '{output_key}'")
+            print(f"DEBUG_MARKETER_SUMMARY: Agent name: '{agent_name}'")
+            print(f"DEBUG_MARKETER_SUMMARY: Response type: {type(response_text)}")
+            print(f"DEBUG_MARKETER_SUMMARY: Response length: {len(response_text) if response_text else 0}")
+            print(f"DEBUG_MARKETER_SUMMARY: Response preview (first 200 chars): '{response_text[:200] if response_text else 'None'}'")
+            if response_text and len(response_text) > 200:
+                print(f"DEBUG_MARKETER_SUMMARY: Response end (last 200 chars): '{response_text[-200:]}'")
+        
         # 중간 요약 응답인지 확인
         is_summary_response = "_summary" in output_key
         
         # 기본 유효성 검사
         if not response_text:
-            print(f"DEBUG_VALIDATION: OutputKey '{output_key}', Reason: Response is empty or None.")
+            print(f"DEBUG_VALIDATION: OutputKey '{output_key}', Agent '{agent_name}', Reason: Response is empty or None.")
             basic_validation_failed = True
         elif not isinstance(response_text, str):
-            print(f"DEBUG_VALIDATION: OutputKey '{output_key}', Reason: Response is not a string (type: {type(response_text)}).")
+            print(f"DEBUG_VALIDATION: OutputKey '{output_key}', Agent '{agent_name}', Reason: Response is not a string (type: {type(response_text)}).")
             basic_validation_failed = True
         elif len(response_text.strip()) < 20:
-            print(f"DEBUG_VALIDATION: OutputKey '{output_key}', Reason: Response length ({len(response_text.strip())}) is less than 20.")
+            print(f"DEBUG_VALIDATION: OutputKey '{output_key}', Agent '{agent_name}', Reason: Response length ({len(response_text.strip())}) is less than 20.")
             basic_validation_failed = True
         else:
             basic_validation_failed = False
         
         # 중간 요약 응답에 대한 추가 유효성 검사
         if is_summary_response and not basic_validation_failed:
-            has_key_points = "핵심 포인트:" in response_text
-            has_summary = "종합 요약:" in response_text
+            has_key_points = "핵심 포인트:" in response_text or "핵심 포인트" in response_text
+            has_summary = "종합 요약:" in response_text or "종합 요약" in response_text
             
             if not has_key_points:
-                print(f"DEBUG_VALIDATION: OutputKey '{output_key}', Reason: Missing '핵심 포인트:' in summary.")
+                print(f"DEBUG_VALIDATION: OutputKey '{output_key}', Agent '{agent_name}', Reason: Missing '핵심 포인트:' in summary.")
             
             if not has_summary:
-                print(f"DEBUG_VALIDATION: OutputKey '{output_key}', Reason: Missing '종합 요약:' in summary.")
+                print(f"DEBUG_VALIDATION: OutputKey '{output_key}', Agent '{agent_name}', Reason: Missing '종합 요약:' in summary.")
             
             if not (has_key_points and has_summary):
                 print(f"WARNING: Summary response from {agent_name} for {output_key} is missing required format elements. Generating fallback response.")
                 basic_validation_failed = True
+        
+        # marketer_summary 관련 추가 로깅
+        if output_key == "marketer_report_phase1_summary":
+            print(f"DEBUG_MARKETER_SUMMARY: Validation result - basic_validation_failed: {basic_validation_failed}")
+            if is_summary_response:
+                print(f"DEBUG_MARKETER_SUMMARY: Format check - has_key_points: {has_key_points if 'has_key_points' in locals() else 'N/A'}")
+                print(f"DEBUG_MARKETER_SUMMARY: Format check - has_summary: {has_summary if 'has_summary' in locals() else 'N/A'}")
         
         # 유효하지 않은 응답에 대한 대체 응답 생성
         if basic_validation_failed:
@@ -315,7 +332,13 @@ class AdkController:
 **종합 요약:**
 해당 페르소나의 원본 보고서에 대한 요약 생성에 실패했습니다. 원본 보고서를 직접 확인해주시기 바랍니다."""
             
+            if output_key == "marketer_report_phase1_summary":
+                print(f"DEBUG_MARKETER_SUMMARY: Using fallback response: '{fallback_response}'")
+            
             return fallback_response
+        
+        if output_key == "marketer_report_phase1_summary":
+            print(f"DEBUG_MARKETER_SUMMARY: Validation passed, returning original response")
         
         return response_text
     
@@ -331,8 +354,24 @@ class AdkController:
         Returns:
             Dict[str, Any]: 처리된 응답 정보
         """
+        # marketer_report_phase1_summary 관련 상세 로깅 추가
+        if output_key == "marketer_report_phase1_summary":
+            print(f"DEBUG_PROCESS_RESPONSE: Starting processing for output_key '{output_key}'")
+            print(f"DEBUG_PROCESS_RESPONSE: Agent name: '{agent_name}'")
+            print(f"DEBUG_PROCESS_RESPONSE: Response_text type: {type(response_text)}")
+            print(f"DEBUG_PROCESS_RESPONSE: Response_text length: {len(response_text) if response_text else 0}")
+            print(f"DEBUG_PROCESS_RESPONSE: Response_text content preview: '{response_text[:300] if response_text else 'None'}...'")
+        
         # 응답 검증 및 필요 시 대체 응답 생성
         validated_response = self._validate_agent_response(response_text, agent_name, output_key)
+        
+        # marketer_summary 관련 추가 로깅
+        if output_key == "marketer_report_phase1_summary":
+            print(f"DEBUG_PROCESS_RESPONSE: Validated_response type: {type(validated_response)}")
+            print(f"DEBUG_PROCESS_RESPONSE: Validated_response length: {len(validated_response) if validated_response else 0}")
+            print(f"DEBUG_PROCESS_RESPONSE: Response changed: {validated_response != response_text}")
+            if validated_response != response_text:
+                print(f"DEBUG_PROCESS_RESPONSE: Fallback response used for '{output_key}'")
         
         # 응답이 변경되었으면 세션 상태 업데이트
         if validated_response != response_text:
@@ -355,11 +394,16 @@ class AdkController:
                 print(f"ERROR: Failed to update session with fallback response: {e}")
         
         # 결과 및 UI 메시지 반환
-        return {
+        result = {
             "output_key": output_key,
             "response": validated_response,
             "agent_name": agent_name
         }
+        
+        if output_key == "marketer_report_phase1_summary":
+            print(f"DEBUG_PROCESS_RESPONSE: Final result for '{output_key}': {result}")
+        
+        return result
     
     def handle_adk_error(self, error: Exception, context: str) -> str:
         """

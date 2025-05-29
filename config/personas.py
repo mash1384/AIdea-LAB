@@ -25,7 +25,7 @@ PERSONA_CONFIGS = {
         "objective": "아이디어의 잠재적 문제점, 리스크, 논리적 허점을 날카롭게 지적하여 사용자가 현실적인 판단을 내리고 아이디어를 보완하도록 돕는다.",
         "icon": "🔍",  # 페르소나를 나타내는 이모지
         "temperature": 0.2,  # 낮은 온도로 일관된 비판적 분석 유도
-        "max_output_tokens": 5000,
+        "max_output_tokens": 6000,
         "output_key": "critic_response",  # session.state에 저장될 키
     },
     
@@ -36,7 +36,7 @@ PERSONA_CONFIGS = {
         "objective": "아이디어의 독창적인 가치와 시장 잠재력을 극대화하고, 사용자에게 새로운 영감과 긍정적인 에너지를 제공하여 아이디어를 더욱 매력적으로 발전시키도록 돕는다.",
         "icon": "💡",
         "temperature": 0.7,  # 높은 온도로 창의적 아이디어 유도
-        "max_output_tokens": 5000,
+        "max_output_tokens": 6000,
         "output_key": "marketer_response",
     },
     
@@ -60,7 +60,7 @@ ORCHESTRATOR_CONFIG = {
     "objective": "사용자가 제출한 아이디어에 대해 여러 AI 페르소나들의 다양한 관점을 효과적으로 이끌어내고, 그 논의 과정을 명확하게 관리하며, 최종적으로 사용자에게 실질적인 도움이 되는 통찰과 요약을 제공한다.",
     "icon": "🧠",
     "temperature": 0.4,  # 요약 및 정리를 위한 중간 온도
-    "max_output_tokens": 7000,
+    "max_output_tokens": 9000,
     "summary_output_key": "final_summary",  # 최종 요약이 저장될 키
     "dialogue_summary_key": "dialogue_summary",  # 대화 요약이 저장될 키
 }
@@ -76,7 +76,7 @@ PERSONA_LLM_TASKS = {
         "generate_final_report": {
             "description": "최종 요약 보고서 생성",
             "temperature": 0.4,
-            "max_output_tokens": 7500  # 최종 보고서는 더 긴 출력 허용
+            "max_output_tokens": 9000  # 최종 보고서는 더 긴 출력 허용
         },
         "decide_next_step": {
             "description": "다음 행동/페르소나 결정 지원 (고급 기능)",

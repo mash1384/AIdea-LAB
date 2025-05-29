@@ -1118,32 +1118,23 @@ ENGINEER_PROMPT = """
 """
 
 def FINAL_SUMMARY_PHASE2_PROMPT_PROVIDER(ctx):
-    """
-    2단계 토론 최종 요약을 위한 동적 프롬프트 생성 함수
-    
-    Args:
-        ctx (ReadonlyContext): 세션 상태 컨텍스트
-        
-    Returns:
-        str: 현재 세션 상태에 맞게 생성된 최종 요약 프롬프트
-    """
     # 세션 상태에서 필요한 값들 가져오기
     initial_idea = ctx.state.get("initial_idea", "특정되지 않은 아이디어")
     user_goal = ctx.state.get("user_goal", "")
     user_constraints = ctx.state.get("user_constraints", "")
     user_values = ctx.state.get("user_values", "")
-    
+
     # 1단계 분석 결과 가져오기
     summary_report_phase1 = ctx.state.get("summary_report_phase1", "아직 1단계 분석이 완료되지 않음")
-    
+
     # 2단계 토론 기록 가져오기
     discussion_history_phase2 = ctx.state.get("discussion_history_phase2", [])
-    
+
     # 토론 히스토리를 효율적으로 요약하여 컨텍스트 관리
     discussion_history_str = summarize_discussion_history(discussion_history_phase2, max_tokens=2000)
-    
+
     prompt = f"""
-당신은 '빈티지라방' 아이디어 분석 프로젝트의 **최종 종합 보고서 작성자**입니다.
+당신은 사용자가 제출한 아이디어 '**"{initial_idea}"**'에 대한 분석 프로젝트의 **최종 종합 보고서 작성자**입니다.
 1단계 개별 분석과 2단계 심화 토론을 바탕으로, 종합적이고 실행 가능한 최종 보고서를 작성해야 합니다.
 
 ### 분석 대상 아이디어:
@@ -1163,6 +1154,8 @@ def FINAL_SUMMARY_PHASE2_PROMPT_PROVIDER(ctx):
 
 ### 2단계 토론 기록:
 {discussion_history_str}
+
+**⚠️ 매우 중요: 보고서 전체 내용은 반드시 하나의 마크다운 코드 블록으로 감싸서 생성해야 합니다. 즉, 보고서의 시작은 \`\`\` 이고, 끝은 \`\`\` 로 끝나야 합니다. 이 코드 블록 내부에는 아래 '최종 보고서 작성 지침'에 제시된 헤더와 내용을 따라주세요.**
 
 ### 최종 보고서 작성 지침:
 
@@ -1184,8 +1177,8 @@ def FINAL_SUMMARY_PHASE2_PROMPT_PROVIDER(ctx):
 - 대안 시나리오 및 피벗 계획
 - 자원 부족 시 우선순위 조정 방안
 
-**4. 특별 강조: 신뢰 구축을 위한 협력 전략:**
-- **마케팅-운영-기술 간 협력 방안 상세 제시**
+**4. 특별 강조: 신뢰 구축을 위한 협력 전략 (필요시 아이디어 특성에 맞게 조정):**
+- (아이디어 "**"{initial_idea}"**"의 특성을 고려하여) 마케팅-운영-기술 간 협력 방안 상세 제시
 - 고객 신뢰 구축을 위한 품질 보증 체계
 - 투명한 운영 프로세스 및 커뮤니케이션 전략
 - 브랜드 신뢰도 향상을 위한 장기적 접근법
@@ -1201,9 +1194,9 @@ def FINAL_SUMMARY_PHASE2_PROMPT_PROVIDER(ctx):
 - 실현 가능하고 구체적인 제안에 중점
 - 사용자의 목표와 제약사항을 충분히 고려
 - 단순한 요약이 아닌 통찰력 있는 종합 분석
-- 특히 '빈티지라방'의 독특함과 시장에서의 포지셔닝 명확화
+- 특히 아이디어 "**"{initial_idea}"**"의 독특함과 시장에서의 포지셔닝 명확화
 
-이제 위의 모든 정보를 종합하여, '빈티지라방' 아이디어에 대한 최종 종합 보고서를 작성해 주세요.
+이제 위의 모든 정보를 종합하여, 아이디어 '**"{initial_idea}"**'에 대한 최종 종합 보고서를 작성해 주세요.
 보고서는 의사결정에 도움이 되는 실용적이고 실행 가능한 내용으로 구성되어야 합니다.
 """
 

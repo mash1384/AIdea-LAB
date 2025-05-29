@@ -60,7 +60,7 @@ ORCHESTRATOR_CONFIG = {
     "objective": "사용자가 제출한 아이디어에 대해 여러 AI 페르소나들의 다양한 관점을 효과적으로 이끌어내고, 그 논의 과정을 명확하게 관리하며, 최종적으로 사용자에게 실질적인 도움이 되는 통찰과 요약을 제공한다.",
     "icon": "🧠",
     "temperature": 0.4,  # 요약 및 정리를 위한 중간 온도
-    "max_output_tokens": 9000,
+    "max_output_tokens": 12000,
     "summary_output_key": "final_summary",  # 최종 요약이 저장될 키
     "dialogue_summary_key": "dialogue_summary",  # 대화 요약이 저장될 키
 }

@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from google.adk.runners import Runner # 실제 ADK Runner 임포트
 from google.genai import types
 from google.adk.events import Event, EventActions
+import google.generativeai as genai  # ADK 실행 직전 API 키 재설정을 위해 추가
 
 # 프로젝트 루트 디렉토리를 sys.path에 추가
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
@@ -110,6 +111,12 @@ def run_phase1_analysis_and_update_ui():
         return
     
     try:
+        # ADK 에이전트 실행 직전에 사용자 API 키로 다시 설정
+        user_api_key = AppStateManager.get_user_api_key()
+        if user_api_key:
+            genai.configure(api_key=user_api_key)
+            print(f"API 키 재설정 완료 (Phase 1): {user_api_key[:10]}...")
+        
         orchestrator = AIdeaLabOrchestrator(model_name=AppStateManager.get_selected_model())
         print(f"Created local orchestrator with model: {AppStateManager.get_selected_model()}")
         
@@ -248,6 +255,12 @@ def handle_phase2_discussion():
             if not AppStateManager.get_awaiting_user_input_phase2():
                 print(f"WARNING: Unexpected analysis phase '{AppStateManager.get_analysis_phase()}' for handle_phase2_discussion")
                 return
+        
+        # ADK 에이전트 실행 직전에 사용자 API 키로 다시 설정
+        user_api_key = AppStateManager.get_user_api_key()
+        if user_api_key:
+            genai.configure(api_key=user_api_key)
+            print(f"API 키 재설정 완료 (Phase 2): {user_api_key[:10]}...")
         
         # 오케스트레이터 생성
         orchestrator = AIdeaLabOrchestrator(model_name=AppStateManager.get_selected_model())

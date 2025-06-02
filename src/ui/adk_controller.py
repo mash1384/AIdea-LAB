@@ -6,6 +6,8 @@ ADK 연동 로직 캡슐화 모듈
 
 import asyncio
 import uuid
+import os
+import google.generativeai as genai
 from typing import Optional, Tuple, List, Dict, Any
 from google.adk.sessions import Session
 from google.genai import types
@@ -36,6 +38,39 @@ class AdkController:
         self.app_name = session_manager.app_name
         self.user_id = session_manager.user_id
     
+    def _ensure_api_key_configured(self) -> bool:
+        """
+        Google AI API 키가 올바르게 설정되어 있는지 확인하고, 필요시 재설정합니다.
+        
+        Returns:
+            bool: API 키 설정 성공 여부
+        """
+        try:
+            # 현재 API 키 상태 확인
+            api_key = os.getenv("GOOGLE_API_KEY_USER_INPUT") or os.getenv("GOOGLE_API_KEY")
+            
+            if not api_key or not api_key.strip():
+                print("❌ ADK Controller: API 키를 찾을 수 없습니다.")
+                return False
+                
+            # API 키 재설정
+            genai.configure(api_key=api_key.strip())
+            
+            # 간단한 테스트로 유효성 검증
+            test_model = genai.GenerativeModel("gemini-2.0-flash")
+            response = test_model.generate_content("Hello")
+            
+            if response.text:
+                print(f"✅ ADK Controller: API 키 재확인 완료: {api_key[:10]}...")
+                return True
+            else:
+                print("❌ ADK Controller: API 키는 유효하지만 응답 생성 실패")
+                return False
+                
+        except Exception as e:
+            print(f"❌ ADK Controller: API 키 확인 중 오류: {str(e)}")
+            return False
+    
     async def execute_phase1_workflow(self, session_id: str, input_content: types.Content, orchestrator: AIdeaLabOrchestrator) -> Tuple[bool, List[Dict], set]:
         """
         1단계 분석 워크플로우를 실행합니다.
@@ -49,6 +84,11 @@ class AdkController:
             Tuple[bool, List[Dict], set]: (성공 여부, 처리된 결과 리스트, 처리된 출력 키 집합)
         """
         print(f"DEBUG: AdkController.execute_phase1_workflow - Starting with session_id: {session_id}")
+        
+        # API 키 설정 확인 및 재설정
+        if not self._ensure_api_key_configured():
+            print("ERROR: AdkController - API 키 설정 실패로 인해 Phase 1 실행을 중단합니다.")
+            return (False, [], set())
         
         # SessionManager 인스턴스 검증 로그 추가
         print(f"DEBUG: AdkController SessionManager instance verification:")
@@ -150,6 +190,15 @@ class AdkController:
         Returns:
             Optional[Dict[str, Any]]: 퍼실리테이터 응답 데이터 또는 None (실패 시)
         """
+        # API 키 설정 확인 및 재설정
+        if not self._ensure_api_key_configured():
+            print("ERROR: AdkController - API 키 설정 실패로 인해 Phase 2 퍼실리테이터 실행을 중단합니다.")
+            return {
+                "raw_response": "",
+                "success": False,
+                "error": "API 키 설정 실패"
+            }
+        
         try:
             runner = Runner(
                 agent=facilitator_agent,
@@ -208,6 +257,15 @@ class AdkController:
         Returns:
             Optional[Dict[str, Any]]: 페르소나 응답 데이터 또는 None (실패 시)
         """
+        # API 키 설정 확인 및 재설정
+        if not self._ensure_api_key_configured():
+            print(f"ERROR: AdkController - API 키 설정 실패로 인해 {persona_name} 페르소나 실행을 중단합니다.")
+            return {
+                "raw_response": "",
+                "success": False,
+                "error": "API 키 설정 실패"
+            }
+        
         try:
             runner = Runner(
                 agent=persona_agent,

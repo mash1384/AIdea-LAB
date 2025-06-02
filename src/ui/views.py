@@ -273,7 +273,11 @@ def render_sidebar():
                 )
             with col2:
                 # 간단한 도움말 버튼
-                help_button = st.button("❓", help="Google AI Studio에서 API 키를 발급받을 수 있습니다.")
+                help_button = st.button(
+                    "❓", 
+                    key="help_api_key_button",
+                    help="Google AI Studio에서 API 키를 발급받을 수 있습니다."
+                )
         
         # API 키 적용 로직
         if apply_key_button:
@@ -304,7 +308,7 @@ def render_sidebar():
         # 모델 선택 UI
         model_options = get_model_display_options()
         selected_display_name = st.selectbox(
-            "",
+            "AI 모델 선택",
             options=list(model_options.keys()),
             index=list(model_options.values()).index(AppStateManager.get_selected_model()) if AppStateManager.get_selected_model() in model_options.values() else 0,
             key="model_selector",

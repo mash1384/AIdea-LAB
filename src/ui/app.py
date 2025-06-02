@@ -60,6 +60,40 @@ from src.ui.discussion_controller import DiscussionController
 # .env 파일에서 환경 변수 로드
 load_dotenv()
 
+# Google AI API 키 전역 설정 및 검증
+def configure_google_ai_api():
+    """Google AI API 키를 전역으로 설정하고 검증합니다."""
+    try:
+        # 환경 변수에서 API 키 가져오기 (우선순위: GOOGLE_API_KEY_USER_INPUT > GOOGLE_API_KEY)
+        api_key = os.getenv("GOOGLE_API_KEY_USER_INPUT") or os.getenv("GOOGLE_API_KEY")
+        
+        if api_key and api_key.strip():
+            # API 키 설정
+            genai.configure(api_key=api_key.strip())
+            
+            # 간단한 테스트로 API 키 유효성 검증
+            try:
+                test_model = genai.GenerativeModel("gemini-2.0-flash")
+                response = test_model.generate_content("Hello")
+                if response.text:
+                    print(f"✅ Google AI API 키 설정 성공: {api_key[:10]}...")
+                    return True
+                else:
+                    print("❌ Google AI API 키는 설정되었지만 응답 생성 실패")
+                    return False
+            except Exception as e:
+                print(f"❌ Google AI API 키 검증 실패: {str(e)}")
+                return False
+        else:
+            print("⚠️ Google AI API 키를 환경 변수에서 찾을 수 없습니다. 사이드바에서 수동으로 입력해주세요.")
+            return False
+    except Exception as e:
+        print(f"❌ Google AI API 키 설정 중 오류 발생: {str(e)}")
+        return False
+
+# 애플리케이션 시작 시 API 키 전역 설정 시도
+api_key_globally_configured = configure_google_ai_api()
+
 # Streamlit 페이지 설정 (모든 import 후, 다른 Streamlit 명령어 이전에 배치)
 st.set_page_config(
     page_title="AIdea Lab - 아이디어 분석 워크숍",
@@ -114,8 +148,29 @@ def run_phase1_analysis_and_update_ui():
         # ADK 에이전트 실행 직전에 사용자 API 키로 다시 설정
         user_api_key = AppStateManager.get_user_api_key()
         if user_api_key:
-            genai.configure(api_key=user_api_key)
-            print(f"API 키 재설정 완료 (Phase 1): {user_api_key[:10]}...")
+            try:
+                genai.configure(api_key=user_api_key)
+                print(f"✅ API 키 재설정 완료 (Phase 1): {user_api_key[:10]}...")
+                
+                # API 키 유효성 재검증
+                test_model = genai.GenerativeModel("gemini-2.0-flash")
+                response = test_model.generate_content("Hello")
+                if not response.text:
+                    raise Exception("API 키는 유효하지만 응답 생성 실패")
+                print("✅ API 키 유효성 재검증 완료")
+                
+            except Exception as e:
+                print(f"❌ API 키 재설정 또는 검증 실패: {str(e)}")
+                AppStateManager.add_message("system", f"⚠️ API 키 설정에 문제가 있습니다: {str(e)}", avatar="⚠️")
+                AppStateManager.change_analysis_phase("phase1_error")
+                st.rerun()
+                return
+        else:
+            print("❌ 사용자 API 키가 없습니다.")
+            AppStateManager.add_message("system", "⚠️ LLM 기능을 사용하려면 사이드바에서 Google API 키를 먼저 입력해주세요.", avatar="⚠️")
+            AppStateManager.change_analysis_phase("idle")
+            st.rerun()
+            return
         
         orchestrator = AIdeaLabOrchestrator(model_name=AppStateManager.get_selected_model())
         print(f"Created local orchestrator with model: {AppStateManager.get_selected_model()}")
@@ -259,8 +314,29 @@ def handle_phase2_discussion():
         # ADK 에이전트 실행 직전에 사용자 API 키로 다시 설정
         user_api_key = AppStateManager.get_user_api_key()
         if user_api_key:
-            genai.configure(api_key=user_api_key)
-            print(f"API 키 재설정 완료 (Phase 2): {user_api_key[:10]}...")
+            try:
+                genai.configure(api_key=user_api_key)
+                print(f"✅ API 키 재설정 완료 (Phase 2): {user_api_key[:10]}...")
+                
+                # API 키 유효성 재검증
+                test_model = genai.GenerativeModel("gemini-2.0-flash")
+                response = test_model.generate_content("Hello")
+                if not response.text:
+                    raise Exception("API 키는 유효하지만 응답 생성 실패")
+                print("✅ API 키 유효성 재검증 완료")
+                
+            except Exception as e:
+                print(f"❌ API 키 재설정 또는 검증 실패: {str(e)}")
+                AppStateManager.add_message("system", f"⚠️ API 키 설정에 문제가 있습니다: {str(e)}", avatar="⚠️")
+                AppStateManager.change_analysis_phase("phase2_error")
+                st.rerun()
+                return
+        else:
+            print("❌ 사용자 API 키가 없습니다.")
+            AppStateManager.add_message("system", "⚠️ LLM 기능을 사용하려면 사이드바에서 Google API 키를 먼저 입력해주세요.", avatar="⚠️")
+            AppStateManager.change_analysis_phase("phase1_complete")
+            st.rerun()
+            return
         
         # 오케스트레이터 생성
         orchestrator = AIdeaLabOrchestrator(model_name=AppStateManager.get_selected_model())

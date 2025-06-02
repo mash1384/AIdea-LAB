@@ -35,3 +35,6 @@ wheels/
 # OS
 .DS_Store
 Thumbs.db 
+
+output.log
+memory-bank/

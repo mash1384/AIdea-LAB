@@ -8,7 +8,7 @@ AIdea Lab은 사용자가 아이디어를 입력하면, 다양한 AI 페르소�
 
 ```bash
 # 저장소 클론 (git 저장소가 있는 경우)
-# git clone https://github.com/your-username/aidea-lab.git
+# git clone https://github.com/mash1384/aidea-lab.git
 # cd aidea-lab
 
 # 가상환경 생성 및 활성화

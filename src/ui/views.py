@@ -202,7 +202,7 @@ def render_chat_messages():
 def render_sidebar():
     """
     사이드바 UI를 렌더링합니다.
-    모델 선택 및 성능 정보를 표시합니다.
+    API 키 설정, 모델 선택 및 성능 정보를 표시합니다.
     """
     from config.models import get_model_display_options, MODEL_CONFIGS, ModelType
     from src.utils.model_monitor import AIModelMonitor
@@ -217,39 +217,159 @@ def render_sidebar():
     with st.sidebar:
         st.title("⚙️ 설정")
         
+        # === 미니멀하고 우아한 API 키 설정 섹션 ===
+        st.markdown("### 🔐 API 연결")
+        
+        # API 키 상태에 따른 스타일링
+        is_configured = AppStateManager.get_api_key_configured()
+        current_key = AppStateManager.get_user_api_key()
+        
+        # 상태 인디케이터가 포함된 컨테이너
+        status_color = "#00C851" if is_configured else "#ff4444"
+        status_icon = "🟢" if is_configured else "🔴"
+        status_text = "연결됨" if is_configured else "미연결"
+        
+        # 상태 표시 (우아한 스타일)
+        st.markdown(
+            f"""
+            <div style="
+                background: linear-gradient(135deg, {'#e8f5e8' if is_configured else '#ffeaea'}, {'#f0f9f0' if is_configured else '#fff0f0'});
+                padding: 12px 16px;
+                border-radius: 12px;
+                border-left: 4px solid {status_color};
+                margin-bottom: 16px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            ">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <span style="font-size: 14px; font-weight: 500; color: #2c3e50;">
+                        {status_icon} API 상태: <span style="color: {status_color};">{status_text}</span>
+                    </span>
+                    {'<span style="font-size: 12px; color: #7f8c8d; font-family: monospace;">●●●●' + current_key[-4:] + '</span>' if is_configured and current_key else ''}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        
+        # API 키 입력 영역 (접기/펼치기 가능)
+        with st.expander("🔑 API 키 설정" if not is_configured else "🔑 API 키 변경", expanded=not is_configured):
+            api_key_input = st.text_input(
+                "",
+                value="",
+                type="password",
+                key="api_key_input",
+                placeholder="Google API 키를 입력하세요 (AIzaSy...)",
+                label_visibility="collapsed"
+            )
+            
+            # 미니멀한 적용 버튼
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                apply_key_button = st.button(
+                    "✨ 적용",
+                    key="apply_api_key_button",
+                    use_container_width=True,
+                    type="primary" if api_key_input else "secondary"
+                )
+            with col2:
+                # 간단한 도움말 버튼
+                help_button = st.button("❓", help="Google AI Studio에서 API 키를 발급받을 수 있습니다.")
+        
+        # API 키 적용 로직
+        if apply_key_button:
+            if api_key_input:
+                with st.spinner("🔍 API 키 확인 중..."):
+                    success = AppStateManager.set_user_api_key(api_key_input)
+                if success:
+                    st.rerun()
+            else:
+                AppStateManager.set_state('api_key_status_message', "⚠️ API 키를 입력해주세요.")
+        
+        # 상태 메시지 표시 (더 우아한 스타일)
+        status_message = AppStateManager.get_api_key_status_message()
+        if status_message:
+            if "✅" in status_message:
+                st.success(status_message)
+            elif "⚠️" in status_message:
+                st.warning(status_message.replace("⚠️ ", ""))
+            else:
+                st.error(status_message.replace("❌ ", ""))
+        
+        # 섹션 구분선
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # === 모델 선택 섹션 ===
+        st.markdown("### 🤖 AI 모델")
+        
         # 모델 선택 UI
         model_options = get_model_display_options()
         selected_display_name = st.selectbox(
-            "모델 선택",
+            "",
             options=list(model_options.keys()),
             index=list(model_options.values()).index(AppStateManager.get_selected_model()) if AppStateManager.get_selected_model() in model_options.values() else 0,
             key="model_selector",
-            on_change=lambda: AppStateManager.change_model(model_options[AppStateManager.get_input_value("model_selector")])
+            on_change=lambda: AppStateManager.change_model(model_options[AppStateManager.get_input_value("model_selector")]),
+            label_visibility="collapsed"
         )
         
         # 선택된 모델의 내부 ID
         selected_model_id = model_options[selected_display_name]
         
-        # 모델 성능 정보 표시
+        # 모델 성능 정보 표시 (미니멀한 스타일)
         if selected_model_id in model_recommendations:
             recommendation = model_recommendations[selected_model_id]
-            recommendation_color = {
-                "highly_recommended": "green",
-                "recommended": "blue",
-                "not_recommended": "red",
-                "insufficient_data": "gray"
-            }.get(recommendation["recommendation"], "black")
             
-            st.markdown(f"<span style='color:{recommendation_color}'>{recommendation['reason']}</span>", unsafe_allow_html=True)
-            
+            # 성능 정보를 우아한 카드 스타일로 표시
             if recommendation["total_calls"] > 0:
-                st.progress(recommendation["success_rate"], f"성공률: {recommendation['success_rate']:.1%}")
-                st.text(f"평균 응답시간: {recommendation['avg_response_time']:.2f}초")
+                success_rate = recommendation["success_rate"]
+                avg_time = recommendation["avg_response_time"]
+                
+                # 성과 지표 색상
+                perf_color = "#00C851" if success_rate > 0.9 else "#ffbb33" if success_rate > 0.7 else "#ff4444"
+                
+                st.markdown(
+                    f"""
+                    <div style="
+                        background: #f8f9fa;
+                        padding: 10px;
+                        border-radius: 8px;
+                        border: 1px solid #e9ecef;
+                        margin: 8px 0;
+                    ">
+                        <div style="font-size: 12px; color: #6c757d; margin-bottom: 4px;">모델 성능</div>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="font-size: 13px;">성공률</span>
+                            <span style="color: {perf_color}; font-weight: 600;">{success_rate:.1%}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
+                            <span style="font-size: 13px;">응답시간</span>
+                            <span style="color: #495057; font-weight: 500;">{avg_time:.1f}초</span>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
         
-        # 최고 추천 모델 표시
+        # 최고 추천 모델 표시 (더 미니멀하게)
         if best_model_info and best_model_info[0] != selected_model_id:
             best_model_name = MODEL_CONFIGS[ModelType(best_model_info[0])]["display_name"] if best_model_info[0] in [m.value for m in ModelType] else best_model_info[0]
-            st.info(f"💡 추천 모델: {best_model_name} (성공률: {best_model_info[1]['success_rate']:.1%})")
+            
+            st.markdown(
+                f"""
+                <div style="
+                    background: linear-gradient(135deg, #e3f2fd, #f8f9fa);
+                    padding: 8px 12px;
+                    border-radius: 8px;
+                    border-left: 3px solid #2196f3;
+                    margin: 8px 0;
+                ">
+                    <div style="font-size: 12px; color: #1976d2;">
+                        💡 추천: {best_model_name}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
 
 def render_app_header():

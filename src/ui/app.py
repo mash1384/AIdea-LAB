@@ -102,6 +102,13 @@ def run_phase1_analysis_and_update_ui():
     
     이 함수는 AdkController를 사용하여 비동기 분석 작업을 호출하고, 결과를 UI에 반영합니다.
     """
+    # API 키 확인
+    if not AppStateManager.get_api_key_configured():
+        AppStateManager.add_message("system", "⚠️ LLM 기능을 사용하려면 사이드바에서 Google API 키를 먼저 입력해주세요.", avatar="⚠️")
+        AppStateManager.change_analysis_phase("idle")
+        st.rerun()
+        return
+    
     try:
         orchestrator = AIdeaLabOrchestrator(model_name=AppStateManager.get_selected_model())
         print(f"Created local orchestrator with model: {AppStateManager.get_selected_model()}")
@@ -226,6 +233,13 @@ def handle_phase2_discussion():
     사용자가 '2단계 토론 시작하기'를 선택하면 실행되는 함수로,
     토론 퍼실리테이터 에이전트와 페르소나 에이전트들 간의 대화를 조율합니다.
     """
+    # API 키 확인
+    if not AppStateManager.get_api_key_configured():
+        AppStateManager.add_message("system", "⚠️ LLM 기능을 사용하려면 사이드바에서 Google API 키를 먼저 입력해주세요.", avatar="⚠️")
+        AppStateManager.change_analysis_phase("phase1_complete")
+        st.rerun()
+        return
+    
     try:
         print("Starting Phase 2 discussion...")
         
@@ -371,7 +385,13 @@ def main():
         elif current_analysis_phase == "phase1_pending_start":
             result = render_phase1_pending_view()
             if result == "execute_analysis":
+                # API 키 확인 후 분석 실행
+                if AppStateManager.get_api_key_configured():
                     run_phase1_analysis_and_update_ui()  # 분석 실행
+                else:
+                    AppStateManager.add_message("system", "⚠️ LLM 기능을 사용하려면 사이드바에서 Google API 키를 먼저 입력해주세요.", avatar="⚠️")
+                    AppStateManager.change_analysis_phase("idle")
+                    st.rerun()
 
         elif current_analysis_phase == "phase1_complete":
             render_phase1_complete_view()
@@ -382,12 +402,24 @@ def main():
         elif current_analysis_phase == "phase2_pending_start":
             result = render_phase2_pending_view()
             if result == "execute_phase2":
-                handle_phase2_discussion()
+                # API 키 확인 후 토론 실행
+                if AppStateManager.get_api_key_configured():
+                    handle_phase2_discussion()
+                else:
+                    AppStateManager.add_message("system", "⚠️ LLM 기능을 사용하려면 사이드바에서 Google API 키를 먼저 입력해주세요.", avatar="⚠️")
+                    AppStateManager.change_analysis_phase("phase1_complete")
+                    st.rerun()
                 
         elif current_analysis_phase == "phase2_running":
             result = render_phase2_running_view()
             if result == "execute_phase2":
-                handle_phase2_discussion()
+                # API 키 확인 후 토론 실행
+                if AppStateManager.get_api_key_configured():
+                    handle_phase2_discussion()
+                else:
+                    AppStateManager.add_message("system", "⚠️ LLM 기능을 사용하려면 사이드바에서 Google API 키를 먼저 입력해주세요.", avatar="⚠️")
+                    AppStateManager.change_analysis_phase("phase1_complete")
+                    st.rerun()
             
         elif current_analysis_phase == "phase2_user_input":
             render_phase2_user_input_view()

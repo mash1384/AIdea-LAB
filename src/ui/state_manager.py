@@ -1,4 +1,6 @@
 import streamlit as st
+import os
+import google.generativeai as genai
 from config.models import DEFAULT_MODEL
 
 # 시스템 안내 메시지 템플릿 정의
@@ -81,13 +83,20 @@ class AppStateManager:
             'awaiting_user_input_phase2': False,
             'phase2_user_prompt': "",
             'phase2_discussion_complete': False,
-            'phase2_summary_complete': False
+            'phase2_summary_complete': False,
+            # API 키 관련 상태 추가
+            'api_key_configured': False,
+            'user_api_key': "",
+            'api_key_status_message': ""
         }
         
         # 없는 상태만 초기화
         for key, value in default_states.items():
             if key not in st.session_state:
                 st.session_state[key] = value
+        
+        # API 키 초기화 (환경 변수에서 기본값 로드)
+        AppStateManager.initialize_api_key()
         
         # 웰컴 메시지 추가 (messages 배열이 비어있을 때만)
         if not st.session_state.messages:
@@ -441,6 +450,111 @@ class AppStateManager:
     def get_input_value(key, default=''):
         """입력 필드 값 가져오기 (Streamlit 위젯 값)"""
         return st.session_state.get(key, default)
+
+    @staticmethod
+    def set_user_api_key(api_key):
+        """
+        사용자가 입력한 API 키를 설정하고 유효성을 검사합니다.
+        
+        Args:
+            api_key (str): 사용자가 입력한 Google API 키
+            
+        Returns:
+            bool: API 키 설정 성공 여부
+        """
+        if not api_key or api_key.strip() == "":
+            AppStateManager.set_state('api_key_status_message', "❌ API 키를 입력해주세요.")
+            AppStateManager.set_state('api_key_configured', False)
+            return False
+        
+        try:
+            # API 키 설정 시도
+            genai.configure(api_key=api_key.strip())
+            
+            # 간단한 테스트 요청으로 API 키 유효성 검증
+            test_model = genai.GenerativeModel("gemini-2.0-flash")
+            response = test_model.generate_content("Hello")
+            
+            if response.text:
+                # 성공
+                AppStateManager.set_state('user_api_key', api_key.strip())
+                AppStateManager.set_state('api_key_configured', True)
+                AppStateManager.set_state('api_key_status_message', "✅ API 키가 성공적으로 적용되었습니다.")
+                print(f"API 키 설정 성공: {api_key[:10]}...")
+                return True
+            else:
+                # 응답이 비어있음
+                AppStateManager.set_state('api_key_status_message', "❌ API 키는 유효하지만 응답이 생성되지 않았습니다.")
+                AppStateManager.set_state('api_key_configured', False)
+                return False
+                
+        except Exception as e:
+            # API 키 유효성 검사 실패
+            error_msg = str(e)
+            if "API_KEY_INVALID" in error_msg or "invalid" in error_msg.lower():
+                AppStateManager.set_state('api_key_status_message', "❌ 유효하지 않은 API 키입니다.")
+            elif "quota" in error_msg.lower() or "limit" in error_msg.lower():
+                AppStateManager.set_state('api_key_status_message', "❌ API 할당량이 초과되었습니다.")
+            else:
+                AppStateManager.set_state('api_key_status_message', f"❌ API 키 설정 중 오류 발생: {error_msg}")
+            
+            AppStateManager.set_state('api_key_configured', False)
+            print(f"API 키 설정 실패: {error_msg}")
+            return False
+    
+    @staticmethod
+    def get_api_key_configured():
+        """API 키 설정 상태 반환"""
+        return AppStateManager.get_state('api_key_configured', False)
+    
+    @staticmethod
+    def get_user_api_key():
+        """사용자가 설정한 API 키 반환"""
+        return AppStateManager.get_state('user_api_key', "")
+    
+    @staticmethod
+    def get_api_key_status_message():
+        """API 키 상태 메시지 반환"""
+        return AppStateManager.get_state('api_key_status_message', "")
+    
+    @staticmethod
+    def clear_api_key_status_message():
+        """API 키 상태 메시지 초기화"""
+        AppStateManager.set_state('api_key_status_message', "")
+    
+    @staticmethod
+    def load_default_api_key():
+        """
+        환경 변수나 기본 설정에서 API 키를 로드합니다.
+        우선순위: GOOGLE_API_KEY_USER_INPUT > GOOGLE_API_KEY
+        """
+        # 사용자 입력용 환경 변수 우선 확인
+        user_input_key = os.getenv("GOOGLE_API_KEY_USER_INPUT")
+        if user_input_key and user_input_key.strip() != "":
+            return user_input_key.strip()
+        
+        # 기본 환경 변수 확인
+        default_key = os.getenv("GOOGLE_API_KEY")
+        if default_key and default_key.strip() != "":
+            return default_key.strip()
+        
+        return ""
+    
+    @staticmethod
+    def initialize_api_key():
+        """
+        앱 시작 시 API 키를 초기화합니다.
+        환경 변수에서 기본값을 가져와 설정을 시도합니다.
+        """
+        if not AppStateManager.get_api_key_configured():
+            default_key = AppStateManager.load_default_api_key()
+            if default_key:
+                print("환경 변수에서 기본 API 키를 발견했습니다. 설정을 시도합니다.")
+                success = AppStateManager.set_user_api_key(default_key)
+                if success:
+                    print("기본 API 키 설정이 성공했습니다.")
+                else:
+                    print("기본 API 키 설정이 실패했습니다.")
 
 
 # 전역 함수들 (호환성을 위해 유지, AppStateManager 메서드를 호출)
